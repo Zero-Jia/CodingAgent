@@ -1,0 +1,45 @@
+[project]
+name = "coding-agent"
+version = "0.1.0"
+description = "A security-first, local Windows coding agent"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "httpx==0.28.1",
+  "pydantic==2.11.7",
+  "typer==0.16.0",
+]
+
+[project.scripts]
+agent = "coding_agent.cli.app:app"
+
+[dependency-groups]
+dev = [
+  "mypy==1.17.1",
+  "pytest==8.4.1",
+  "pytest-asyncio==1.1.0",
+  "ruff==0.12.7",
+]
+
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["coding_agent"]
+
+[tool.uv]
+package = true
