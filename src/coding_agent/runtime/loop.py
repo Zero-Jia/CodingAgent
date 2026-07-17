@@ -41,6 +41,10 @@ class ApprovalProvider(Protocol):
     async def request(self, tool_name: str, reason: str, params: dict[str, object]) -> bool: ...
 
 
+class ArtifactWriter(Protocol):
+    async def put(self, session_id: str, run_id: str, name: str, content: str) -> str: ...
+
+
 class DenyApproval:
     async def request(self, tool_name: str, reason: str, params: dict[str, object]) -> bool:
         return False
@@ -60,6 +64,7 @@ class AgentRuntime:
         max_turns: int,
         max_tool_calls: int,
         approval: ApprovalProvider | None = None,
+        artifact_writer: ArtifactWriter | None = None,
     ) -> None:
         self.model = model
         self.tools = {tool.definition.name: tool for tool in tools}
@@ -69,8 +74,10 @@ class AgentRuntime:
         self.max_turns = max_turns
         self.max_tool_calls = max_tool_calls
         self.approval = approval or DenyApproval()
+        self.artifact_writer = artifact_writer
         self.cancel_signal = asyncio.Event()
         self.follow_ups: asyncio.Queue[str] = asyncio.Queue()
+        self._model_tool_results: dict[str, dict[str, object]] = {}
 
     def cancel(self) -> None:
         self.cancel_signal.set()
@@ -113,9 +120,6 @@ class AgentRuntime:
                     return
                 if isinstance(event, TextDelta):
                     assistant_text.append(event.text)
-                    yield MessageDelta(
-                        session_id=session_id, run_id=run_id, payload={"text": event.text}
-                    )
                 elif event.type == "reasoning_delta":
                     yield ReasoningDelta(
                         session_id=session_id, run_id=run_id, payload={"text": event.text}
@@ -154,6 +158,12 @@ class AgentRuntime:
                     )
                 )
             if not completed_calls:
+                if assistant_text:
+                    yield MessageDelta(
+                        session_id=session_id,
+                        run_id=run_id,
+                        payload={"text": "".join(assistant_text)},
+                    )
                 yield RunFinished(session_id=session_id, run_id=run_id, payload={"turns": turn})
                 await self._trace(session_id, run_id, "run_finished", "runtime", {"turns": turn})
                 return
@@ -169,12 +179,16 @@ class AgentRuntime:
                 async for emitted in self._execute_call(call, session_id, run_id):
                     yield emitted
                     if isinstance(emitted, ToolFinished):
+                        result = self._model_tool_results.pop(
+                            call.id,
+                            {"status": "execution_error", "summary": "tool result was unavailable"},
+                        )
                         messages.append(
                             ChatMessage(
                                 role="tool",
                                 tool_call_id=call.id,
                                 content=json.dumps(
-                                    emitted.payload.get("result", {}),
+                                    result,
                                     ensure_ascii=False,
                                     default=str,
                                 ),
@@ -192,10 +206,15 @@ class AgentRuntime:
             if not isinstance(params, dict) or not all(isinstance(key, str) for key in params):
                 raise ValueError("tool arguments must be a JSON object")
         except (json.JSONDecodeError, ValueError) as error:
+            invalid_result: dict[str, object] = {
+                "status": "validation_failed",
+                "summary": f"invalid arguments: {error}",
+            }
+            self._model_tool_results[call.id] = invalid_result
             yield ToolFinished(
                 session_id=session_id,
                 run_id=run_id,
-                payload={"tool": call.name, "result": f"invalid arguments: {error}"},
+                payload={"tool": call.name, "result": invalid_result},
             )
             return
         decision = self.policy.tool_decision(call.name, params)
@@ -221,19 +240,21 @@ class AgentRuntime:
             )
         if not allowed:
             denied_result = ToolResult(status="policy_denied", summary=decision.reason)
+            self._model_tool_results[call.id] = denied_result.model_dump()
             yield ToolFinished(
                 session_id=session_id,
                 run_id=run_id,
-                payload={"tool": call.name, "result": denied_result.model_dump()},
+                payload={"tool": call.name, "result": _public_result(denied_result, None)},
             )
             return
         tool = self.tools.get(call.name)
         if tool is None:
             unknown_result = ToolResult(status="validation_failed", summary="unknown tool")
+            self._model_tool_results[call.id] = unknown_result.model_dump()
             yield ToolFinished(
                 session_id=session_id,
                 run_id=run_id,
-                payload={"tool": call.name, "result": unknown_result.model_dump()},
+                payload={"tool": call.name, "result": _public_result(unknown_result, None)},
             )
             return
         yield ToolStarted(session_id=session_id, run_id=run_id, payload={"tool": call.name})
@@ -248,18 +269,41 @@ class AgentRuntime:
             else:
                 result = update
         final = result or ToolResult(status="execution_error", summary="tool returned no result")
+        artifact = await self._artifact_for_result(call, final, session_id, run_id)
+        model_result: dict[str, object] = final.model_dump()
+        if artifact is not None:
+            model_result["artifact"] = artifact
+        self._model_tool_results[call.id] = model_result
         await self._trace(
             session_id,
             run_id,
             "tool_finished",
             "tool",
-            {"tool": call.name, "status": final.status, "output": output_summary(final.output)},
+            {
+                "tool": call.name,
+                "status": final.status,
+                "output": output_summary(final.output),
+                "artifact": artifact,
+            },
         )
         yield ToolFinished(
             session_id=session_id,
             run_id=run_id,
-            payload={"tool": call.name, "result": final.model_dump()},
+            payload={
+                "tool": call.name,
+                "result": _public_result(final, artifact),
+                "artifact": artifact,
+            },
         )
+
+    async def _artifact_for_result(
+        self, call: ToolCall, result: ToolResult, session_id: str, run_id: str
+    ) -> str | None:
+        writer = self.artifact_writer
+        if writer is None or not result.output:
+            return None
+        name = f"{call.name}-{call.id}-{result.status}.txt"
+        return await writer.put(session_id, run_id, name, result.output)
 
     async def _trace(
         self,
@@ -279,3 +323,12 @@ class AgentRuntime:
                 payload=payload,
             )
         )
+
+
+def _public_result(result: ToolResult, artifact: str | None) -> dict[str, object]:
+    payload = result.model_dump(exclude={"output"})
+    if result.output:
+        payload["output_chars"] = len(result.output)
+    if artifact is not None:
+        payload["artifact"] = artifact
+    return payload

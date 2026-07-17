@@ -9,15 +9,22 @@
 ```powershell
 uv sync --all-groups
 $env:DEEPSEEK_API_KEY = "你的本地密钥"
+
+1. 只读分析
 uv run agent chat --workspace .
+2. 允许修改文件
+uv run agent chat --workspace . --allow-write
+3. 允许修改和运行验证
+uv run agent chat --workspace . --allow-write --allow-shell
 ```
 
-`agent chat` 是连续会话模式：同一个终端中的每次提问都会复用会话上下文。输入 `/help` 查看命令，输入 `/exit` 保存并退出。
+`agent chat` 是连续会话模式：同一个终端中的每次提问都会复用会话上下文。输入 `/help` 查看命令，输入 `/exit` 保存并退出。同一会话只能由一个终端持有；异常退出后的失效锁可在确认原进程不在运行后使用 `--force-unlock` 清理。
 
 恢复已退出的会话：
 
 ```powershell
 uv run agent chat --workspace . --resume <会话ID>
+uv run agent chat --workspace . --resume <会话ID> --force-unlock
 ```
 
 仍可执行一次性任务：
@@ -52,11 +59,16 @@ $env:DEEPSEEK_MODEL = "deepseek-chat"
 
 - `sessions/<session_id>.jsonl`：不可变的会话事件历史（`agent resume`、`agent status`）
 - `checkpoints/<session_id>.json`：连续对话的可恢复模型上下文（`agent chat --resume`）
+- `transcripts/<session_id>.md`：按完整用户/Agent 回答合并的可读会话记录
+- `session-index.json`：`/sessions` 使用的会话摘要索引
+- `locks/<session_id>.lock`：连续会话的独占锁
 - `traces/<session_id>/<run_id>.jsonl`：关联运行过程的结构化追踪
 - `artifacts/<session_id>/<run_id>/`：可选的脱敏产物
 - `logs/application.jsonl`：应用诊断日志
 
-默认追踪等级为 `redacted`。API 密钥、Authorization 头、密码/令牌字段和可识别的密钥赋值都会被脱敏。较长工具输出只保存哈希、长度与简短预览。
+终端默认只显示 Agent 的最终回答、审批和失败/取消提示；工具完整输出不会直接显示。API 密钥、Authorization 头、密码/令牌字段和可识别的密钥赋值都会被脱敏。
+
+应用启动、会话恢复、运行开始和完成会写入 `logs/application.jsonl`。每次有文本输出的工具调用都会将脱敏全文保存到 `artifacts/<session_id>/<run_id>/`；trace、transcript、session 事件和 checkpoint 仅记录摘要、字符数与 artifact 相对路径。
 
 ## 扩展路线
 

@@ -34,11 +34,31 @@ class ConversationCheckpoint(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class SessionSummary(BaseModel):
+    session_id: str
+    workspace: str
+    model_name: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    last_status: str = "created"
+    last_user_message_preview: str = ""
+    message_count: int = 0
+    run_count: int = 0
+    tool_count: int = 0
+    approval_count: int = 0
+    cancelled_count: int = 0
+    failed_count: int = 0
+    total_duration_ms: float = 0.0
+
+
 class SessionStore(Protocol):
     async def append(self, event: SessionEvent) -> None: ...
     async def load(self, session_id: str) -> list[SessionEvent]: ...
     async def save_checkpoint(self, checkpoint: ConversationCheckpoint) -> None: ...
     async def load_checkpoint(self, session_id: str) -> ConversationCheckpoint | None: ...
+    async def save_summary(self, summary: SessionSummary) -> None: ...
+    async def list_summaries(self) -> list[SessionSummary]: ...
+    async def append_transcript(self, session_id: str, content: str) -> None: ...
 
 
 class JsonlSessionStore:
@@ -70,6 +90,22 @@ class JsonlSessionStore:
             return None
         return await asyncio.to_thread(_load_checkpoint, path)
 
+    async def save_summary(self, summary: SessionSummary) -> None:
+        path = self.root / "session-index.json"
+        await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(_save_summary, path, summary)
+
+    async def list_summaries(self) -> list[SessionSummary]:
+        path = self.root / "session-index.json"
+        if not path.exists():
+            return []
+        return await asyncio.to_thread(_load_summaries, path)
+
+    async def append_transcript(self, session_id: str, content: str) -> None:
+        path = self.root / "transcripts" / f"{session_id}.md"
+        await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(_append, path, content)
+
 
 def _append(path: Path, line: str) -> None:
     with path.open("a", encoding="utf-8") as handle:
@@ -99,10 +135,33 @@ def _load_checkpoint(path: Path) -> ConversationCheckpoint | None:
         return None
 
 
+def _save_summary(path: Path, summary: SessionSummary) -> None:
+    items = _load_summaries(path)
+    by_id = {item.session_id: item for item in items}
+    by_id[summary.session_id] = summary
+    ordered = sorted(by_id.values(), key=lambda item: item.updated_at, reverse=True)
+    _atomic_write(
+        path,
+        json.dumps(
+            [item.model_dump(mode="json") for item in ordered], ensure_ascii=False, indent=2
+        ),
+    )
+
+
+def _load_summaries(path: Path) -> list[SessionSummary]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, list):
+            return []
+        return [SessionSummary.model_validate(item) for item in raw]
+    except (OSError, json.JSONDecodeError, ValueError):
+        return []
+
+
 def _redacted_checkpoint(checkpoint: ConversationCheckpoint) -> ConversationCheckpoint:
     messages: list[ChatMessage] = []
     for message in checkpoint.messages:
-        content = redact(message.content)
+        content = _checkpoint_content(message)
         calls = [
             call.model_copy(update={"arguments_json": redact(call.arguments_json)})
             for call in message.tool_calls
@@ -116,3 +175,19 @@ def _redacted_checkpoint(checkpoint: ConversationCheckpoint) -> ConversationChec
             )
         )
     return checkpoint.model_copy(update={"messages": messages})
+
+
+def _checkpoint_content(message: ChatMessage) -> object:
+    if message.role != "tool":
+        return redact(message.content)
+    try:
+        payload = json.loads(message.content)
+    except json.JSONDecodeError:
+        return redact(message.content)
+    if not isinstance(payload, dict):
+        return redact(message.content)
+    output = payload.pop("output", None)
+    if isinstance(output, str):
+        payload["output_chars"] = len(output)
+        payload["output_persisted_in_artifact"] = True
+    return json.dumps(redact(payload), ensure_ascii=False, default=str)

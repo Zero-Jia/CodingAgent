@@ -28,10 +28,12 @@ class ToolResult(BaseModel):
 class ToolContext(BaseModel):
     workspace: str
     max_output_chars: int = 12_000
+    artifact_output_chars: int = 4_000
 
 
 class Cancellation(Protocol):
     def is_set(self) -> bool: ...
+    async def wait(self) -> bool: ...
 
 
 class Tool(Protocol):

@@ -69,7 +69,7 @@ class JsonlArtifactStore:
     def __init__(self, root: Path) -> None:
         self.root = root
 
-    async def put(self, session_id: str, run_id: str, name: str, content: str) -> Path:
+    async def put(self, session_id: str, run_id: str, name: str, content: str) -> str:
         safe_name = Path(name).name
         path = self.root / "artifacts" / session_id / run_id / safe_name
         await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
@@ -80,7 +80,7 @@ class JsonlArtifactStore:
             safe_content,
             encoding="utf-8",
         )
-        return path
+        return str(path.relative_to(self.root))
 
 
 class ApplicationLog:

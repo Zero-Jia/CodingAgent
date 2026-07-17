@@ -176,6 +176,7 @@ class WriteTool(BaseTool):
 
 class PowerShellTool(BaseTool):
     def __init__(self, name: str = "shell") -> None:
+        self._process: asyncio.subprocess.Process | None = None
         self.definition = ToolDefinition(
             name=name,
             description="Run a bounded PowerShell command in the workspace.",
@@ -214,18 +215,26 @@ class PowerShellTool(BaseTool):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        self._process = process
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-        except TimeoutError:
-            process.kill()
-            await process.wait()
-            yield ToolResult(status="timeout", summary=f"command exceeded {timeout}s")
-            return
-        if cancellation.is_set():
-            yield ToolResult(
-                status="cancelled", summary="shell command cancelled", exit_code=process.returncode
+            communicate = asyncio.create_task(process.communicate())
+            cancelled = asyncio.create_task(cancellation.wait())
+            done, pending = await asyncio.wait(
+                {communicate, cancelled}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
             )
-            return
+            for task in pending:
+                task.cancel()
+            if cancelled in done:
+                await self._stop_process(process)
+                yield ToolResult(status="cancelled", summary="shell command cancelled")
+                return
+            if communicate not in done:
+                await self._stop_process(process)
+                yield ToolResult(status="timeout", summary=f"command exceeded {timeout}s")
+                return
+            stdout, stderr = communicate.result()
+        finally:
+            self._process = None
         output = (stdout.decode(errors="replace") + stderr.decode(errors="replace"))[
             : context.max_output_chars
         ]
@@ -235,6 +244,16 @@ class PowerShellTool(BaseTool):
         yield ToolResult(
             status=status, summary="command completed", output=output, exit_code=process.returncode
         )
+
+    async def _stop_process(self, process: asyncio.subprocess.Process) -> None:
+        if process.returncode is not None:
+            return
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=2)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
 
 
 class GitDiffTool(PowerShellTool):
