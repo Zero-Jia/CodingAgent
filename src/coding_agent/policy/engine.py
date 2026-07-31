@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+
+from coding_agent.workspace.security import WorkspacePathPolicy
 
 Decision = Literal["allow", "deny", "require_approval"]
 
@@ -17,43 +18,25 @@ class PolicyDecision:
 
 
 class PolicyEngine:
-    _sensitive_parts = {".env", ".ssh", "credentials", "secrets", "token"}
-    _blocked_shell = re.compile(
-        r"\b(?:git\s+(?:commit|push)|Invoke-WebRequest|curl|wget|pip\s+install|uv\s+(?:add|sync)|npm\s+install)\b|"
-        r"(?:Remove-Item|del|rm)\s+.*(?:-Recurse|/s)",
-        re.IGNORECASE,
-    )
-
     def __init__(
         self, workspace: Path, *, allow_write: bool, allow_shell: bool, non_interactive: bool
     ) -> None:
         self.workspace = workspace.resolve()
+        self.paths = WorkspacePathPolicy(self.workspace)
         self.allow_write = allow_write
         self.allow_shell = allow_shell
         self.non_interactive = non_interactive
 
     def path_decision(self, path: Path, tool_name: str) -> PolicyDecision:
         try:
-            path.resolve().relative_to(self.workspace)
+            self.paths.relative(path)
         except ValueError:
             return PolicyDecision("deny", "path is outside the workspace")
-        lower = {part.lower() for part in path.parts}
-        if any(part in lower for part in self._sensitive_parts) or path.name.lower().startswith(
-            ".env"
-        ):
-            return PolicyDecision("deny", "sensitive file access is denied")
+        if self.paths.is_protected(path):
+            return PolicyDecision("deny", "sensitive or internal file access is denied")
         if tool_name in {"read", "search", "git_diff"}:
             return PolicyDecision("allow", "bounded read-only workspace operation")
         return self._authorization("write operation", self.allow_write)
-
-    def shell_decision(self, command: str) -> PolicyDecision:
-        if self._blocked_shell.search(command):
-            return PolicyDecision(
-                "deny",
-                "network, dependency installation, destructive git, or destructive commands "
-                "are denied",
-            )
-        return self._authorization("shell operation", self.allow_shell)
 
     def tool_decision(self, tool_name: str, params: dict[str, object]) -> PolicyDecision:
         if tool_name in {"read", "edit", "write"}:
@@ -61,11 +44,18 @@ class PolicyEngine:
             if not isinstance(raw_path, str):
                 return PolicyDecision("deny", "tool path must be a string")
             return self.path_decision(self.workspace / raw_path, tool_name)
-        if tool_name in {"shell", "verify"}:
+        if tool_name in {"sandbox_shell", "verify"}:
             command = params.get("command")
             if not isinstance(command, str):
                 return PolicyDecision("deny", "tool command must be a string")
-            return self.shell_decision(command)
+            return self._authorization("sandbox operation", self.allow_shell)
+        if tool_name == "apply_patch":
+            patch_id = params.get("patch_id")
+            if not isinstance(patch_id, str) or not patch_id:
+                return PolicyDecision("deny", "patch_id must be a non-empty string")
+            return self._authorization("patch application", self.allow_write)
+        if tool_name == "shell":
+            return PolicyDecision("deny", "host shell execution is disabled; use sandbox_shell")
         if tool_name in {"search", "git_diff"}:
             return PolicyDecision("allow", "read-only workspace operation")
         return PolicyDecision("deny", f"unknown tool: {tool_name}")

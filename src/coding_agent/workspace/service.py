@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import subprocess
 from pathlib import Path
 
 from pydantic import BaseModel, Field
+
+from coding_agent.workspace.security import WorkspacePathPolicy
 
 
 class RepositoryContext(BaseModel):
@@ -23,6 +26,7 @@ class RepositoryContext(BaseModel):
 class WorkspaceService:
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
+        self.paths = WorkspacePathPolicy(self.root)
 
     async def inspect(self) -> RepositoryContext:
         return await asyncio.to_thread(self._inspect_sync)
@@ -41,7 +45,7 @@ class WorkspaceService:
                 candidate = directory / name
                 if candidate.exists() and candidate.is_file():
                     rules.append(self._bounded_read(candidate, 8_000))
-        suffixes = {path.suffix.lower() for path in self.root.rglob("*") if path.is_file()}
+        suffixes = {path.suffix.lower() for path in self._workspace_files()}
         languages = sorted(
             {
                 {
@@ -57,7 +61,7 @@ class WorkspaceService:
         )
         commands: list[str] = []
         if "pyproject.toml" in present:
-            commands.append("uv run pytest")
+            commands.append("python -m pytest")
         if "package.json" in present:
             commands.append("npm test")
         is_git = (self.root / ".git").exists()
@@ -81,17 +85,25 @@ class WorkspaceService:
     def _search_sync(self, query: str, max_results: int) -> str:
         rg = shutil.which("rg")
         if rg:
+            globs = [
+                value
+                for pattern in self.paths.dockerignore_patterns()
+                for value in ("--glob", pattern)
+            ]
+            command = [
+                rg,
+                "-n",
+                "--glob",
+                "!.git",
+                "--max-count",
+                str(max_results),
+                *globs,
+                "--",
+                query,
+                str(self.root),
+            ]
             process = subprocess.run(
-                [
-                    rg,
-                    "-n",
-                    "--glob",
-                    "!.git",
-                    "--max-count",
-                    str(max_results),
-                    query,
-                    str(self.root),
-                ],
+                command,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -100,17 +112,34 @@ class WorkspaceService:
             )
             return process.stdout[:12_000]
         matches: list[str] = []
-        for path in self.root.rglob("*"):
-            if path.is_file() and ".git" not in path.parts and len(matches) < max_results:
-                try:
-                    for number, line in enumerate(
-                        path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
-                    ):
-                        if query.lower() in line.lower():
-                            matches.append(f"{path.relative_to(self.root)}:{number}:{line[:300]}")
-                except OSError:
-                    continue
+        for path in self._workspace_files():
+            if len(matches) >= max_results:
+                break
+            try:
+                for number, line in enumerate(
+                    path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+                ):
+                    if query.lower() in line.lower():
+                        matches.append(f"{path.relative_to(self.root)}:{number}:{line[:300]}")
+            except OSError:
+                continue
         return "\n".join(matches)
+
+    def _workspace_files(self) -> list[Path]:
+        files: list[Path] = []
+        for root, directories, names in os.walk(self.root, followlinks=False):
+            current = Path(root)
+            directories[:] = [
+                name
+                for name in directories
+                if not (current / name).is_symlink()
+                and not self.paths.is_excluded_from_snapshot(current / name)
+            ]
+            for name in names:
+                path = current / name
+                if path.is_file() and not path.is_symlink() and not self.paths.is_protected(path):
+                    files.append(path)
+        return files
 
     def _resolve(self, relative_path: str) -> Path:
         target = (self.root / relative_path).resolve()

@@ -217,6 +217,16 @@ class AgentRuntime:
                 payload={"tool": call.name, "result": invalid_result},
             )
             return
+        tool = self.tools.get(call.name)
+        if tool is None:
+            unknown_result = ToolResult(status="validation_failed", summary="unknown tool")
+            self._model_tool_results[call.id] = unknown_result.model_dump()
+            yield ToolFinished(
+                session_id=session_id,
+                run_id=run_id,
+                payload={"tool": call.name, "result": _public_result(unknown_result, None)},
+            )
+            return
         decision = self.policy.tool_decision(call.name, params)
         await self._trace(
             session_id,
@@ -227,12 +237,18 @@ class AgentRuntime:
         )
         allowed = decision.decision == "allow"
         if decision.decision == "require_approval":
+            approval_params = params
+            approval_details = getattr(tool, "approval_details", None)
+            if callable(approval_details):
+                candidate = approval_details(params)
+                if isinstance(candidate, dict):
+                    approval_params = candidate
             yield ApprovalRequested(
                 session_id=session_id,
                 run_id=run_id,
-                payload={"tool": call.name, "reason": decision.reason},
+                payload={"tool": call.name, "reason": decision.reason, "details": approval_params},
             )
-            allowed = await self.approval.request(call.name, decision.reason, params)
+            allowed = await self.approval.request(call.name, decision.reason, approval_params)
             yield ApprovalResolved(
                 session_id=session_id,
                 run_id=run_id,
@@ -245,16 +261,6 @@ class AgentRuntime:
                 session_id=session_id,
                 run_id=run_id,
                 payload={"tool": call.name, "result": _public_result(denied_result, None)},
-            )
-            return
-        tool = self.tools.get(call.name)
-        if tool is None:
-            unknown_result = ToolResult(status="validation_failed", summary="unknown tool")
-            self._model_tool_results[call.id] = unknown_result.model_dump()
-            yield ToolFinished(
-                session_id=session_id,
-                run_id=run_id,
-                payload={"tool": call.name, "result": _public_result(unknown_result, None)},
             )
             return
         yield ToolStarted(session_id=session_id, run_id=run_id, payload={"tool": call.name})

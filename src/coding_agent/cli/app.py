@@ -21,18 +21,37 @@ app = typer.Typer(help="安全优先的本地编程 Agent。", no_args_is_help=T
 
 class TerminalApproval(ApprovalProvider):
     async def request(self, tool_name: str, reason: str, params: dict[str, object]) -> bool:
+        command = params.get("command")
+        if isinstance(command, str):
+            typer.echo("沙箱命令：\n" + command)
+        changed_files = params.get("changed_files")
+        if isinstance(changed_files, list):
+            typer.echo("待回写文件：" + ", ".join(str(item) for item in changed_files))
+        preview = params.get("diff_preview")
+        if isinstance(preview, str):
+            typer.echo("待回写补丁：\n" + preview)
         return typer.confirm(f"批准 {tool_name} 操作吗？原因：{reason}", default=False)
 
 
 def _build_agent(
-    workspace: Path, model: str | None, allow_write: bool, allow_shell: bool, non_interactive: bool
+    workspace: Path,
+    model: str | None,
+    allow_write: bool,
+    allow_shell: bool,
+    non_interactive: bool,
+    sandbox_image: str | None = None,
 ) -> CodingAgent:
+    overrides: dict[str, object] = {
+        "model": model or "deepseek-chat",
+        "allow_write": allow_write,
+        "allow_shell": allow_shell,
+        "non_interactive": non_interactive,
+    }
+    if sandbox_image is not None:
+        overrides["sandbox_image"] = sandbox_image
     config = AgentConfig.from_environment(
         workspace,
-        model=model or "deepseek-chat",
-        allow_write=allow_write,
-        allow_shell=allow_shell,
-        non_interactive=non_interactive,
+        **overrides,
     )
     if config.deepseek_api_key is None:
         raise typer.BadParameter("未设置 DEEPSEEK_API_KEY，无法运行真实 Agent")
@@ -51,11 +70,17 @@ def run(
     model: Annotated[str | None, typer.Option("--model")] = None,
     allow_write: Annotated[bool, typer.Option("--allow-write")] = False,
     allow_shell: Annotated[bool, typer.Option("--allow-shell")] = False,
+    sandbox_image: Annotated[str | None, typer.Option("--sandbox-image")] = None,
     non_interactive: Annotated[bool, typer.Option("--non-interactive")] = False,
 ) -> None:
     """执行一次任务。"""
     asyncio.run(
-        _run_once(_build_agent(workspace, model, allow_write, allow_shell, non_interactive), task)
+        _run_once(
+            _build_agent(
+                workspace, model, allow_write, allow_shell, non_interactive, sandbox_image
+            ),
+            task,
+        )
     )
 
 
@@ -67,12 +92,15 @@ def chat(
     model: Annotated[str | None, typer.Option("--model")] = None,
     allow_write: Annotated[bool, typer.Option("--allow-write")] = False,
     allow_shell: Annotated[bool, typer.Option("--allow-shell")] = False,
+    sandbox_image: Annotated[str | None, typer.Option("--sandbox-image")] = None,
     non_interactive: Annotated[bool, typer.Option("--non-interactive")] = False,
     resume: Annotated[str | None, typer.Option("--resume")] = None,
     force_unlock: Annotated[bool, typer.Option("--force-unlock")] = False,
 ) -> None:
     """启动独占的连续聊天会话。"""
-    agent = _build_agent(workspace, model, allow_write, allow_shell, non_interactive)
+    agent = _build_agent(
+        workspace, model, allow_write, allow_shell, non_interactive, sandbox_image
+    )
     asyncio.run(_chat_loop(agent, resume, force_unlock))
 
 
@@ -182,7 +210,7 @@ def _status_text(session: ChatSession) -> str:
         f"最近状态：{summary.last_status}；失败：{summary.failed_count}；取消：{summary.cancelled_count}\n"
         f"累计运行时间：{summary.total_duration_ms:.0f} ms\n"
         f"授权：write={'是' if session._agent.config.allow_write else '否'}，"
-        f"shell={'是' if session._agent.config.allow_shell else '否'}"
+        f"Docker 沙箱={'是' if session._agent.config.allow_shell else '否'}"
     )
 
 

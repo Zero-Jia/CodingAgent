@@ -264,6 +264,13 @@ class GitDiffTool(PowerShellTool):
         self, params: dict[str, object], context: ToolContext, cancellation: Cancellation
     ) -> AsyncIterator[ToolUpdate | ToolResult]:
         async for result in super().execute(
-            {"command": "git diff --stat; git diff -- ."}, context, cancellation
+            {
+                "command": (
+                    "git --no-pager -c core.pager=cat diff --no-ext-diff --no-textconv --stat; "
+                    "git --no-pager -c core.pager=cat diff --no-ext-diff --no-textconv -- ."
+                )
+            },
+            context,
+            cancellation,
         ):
             yield result

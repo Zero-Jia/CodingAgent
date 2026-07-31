@@ -23,6 +23,7 @@ class ToolResult(BaseModel):
     output: str = ""
     exit_code: int | None = None
     changed_files: list[str] = Field(default_factory=list)
+    details: dict[str, object] = Field(default_factory=dict)
 
 
 class ToolContext(BaseModel):

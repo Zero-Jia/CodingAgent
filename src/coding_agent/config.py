@@ -16,6 +16,12 @@ class AgentConfig(BaseModel):
     allow_write: bool = False
     allow_shell: bool = False
     non_interactive: bool = False
+    sandbox_image: str = "coding-agent-sandbox:python-3.12"
+    sandbox_timeout_seconds: int = 60
+    sandbox_memory_mb: int = 768
+    sandbox_cpu_count: float = 1.0
+    sandbox_pids_limit: int = 128
+    sandbox_tmpfs_mb: int = 512
     max_turns: int = 8
     max_tool_calls: int = 24
     max_tool_output_chars: int = 12_000
@@ -32,6 +38,9 @@ class AgentConfig(BaseModel):
             "model": overrides.pop("model", model),
             "deepseek_base_url": base,
             "deepseek_api_key": SecretStr(key) if key else None,
+            "sandbox_image": os.environ.get(
+                "CODING_AGENT_SANDBOX_IMAGE", "coding-agent-sandbox:python-3.12"
+            ),
             **overrides,
         }
         return cls.model_validate(payload)
