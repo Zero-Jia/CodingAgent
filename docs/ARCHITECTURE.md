@@ -4,7 +4,7 @@
 
 ## 当前定位
 
-`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、DeepSeek 模型适配器、事件驱动运行时、Docker 沙箱执行、基于 patch 的宿主机写回、JSONL 会话持久化、脱敏 trace 存储，以及围绕安全链路的基础测试。
+`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、DeepSeek 模型适配器、事件驱动运行时、Docker 沙箱执行、基于 patch 的宿主机写回、JSONL 会话持久化、脱敏 trace 存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
 
 当前项目还不是完整企业级平台。它尚未实现 Web UI、FastAPI 服务、PostgreSQL、Milvus、Redis、MCP、Skills、Hooks、真实 memory 检索、上下文压缩、多 agent 编排和 worktree 隔离。
 
@@ -305,6 +305,7 @@
 
 ```powershell
 uv --cache-dir .uv-cache run ruff check
+uv --cache-dir .uv-cache run mypy
 uv --cache-dir .uv-cache run mypy src
 uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider
 ```
@@ -312,7 +313,8 @@ uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovid
 最近一次验证结果：
 
 - `ruff check`：通过。
+- `mypy`：通过。
 - `mypy src`：通过。
-- `pytest`：16 passed，1 skipped。
+- `pytest`：21 passed，1 skipped。
 
 普通 `uv run pytest` 在 Codex 沙箱账户下可能失败，因为它可能尝试写入 `C:\Users\HP\AppData\Local\Temp\pytest-of-HP`。

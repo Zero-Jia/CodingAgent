@@ -8,6 +8,7 @@
 
 ```powershell
 uv --cache-dir .uv-cache run ruff check
+uv --cache-dir .uv-cache run mypy
 uv --cache-dir .uv-cache run mypy src
 uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider
 ```
@@ -37,16 +38,21 @@ All checks passed!
 ```
 
 ```text
+uv --cache-dir .uv-cache run mypy
+Success: no issues found in 35 source files
+```
+
+```text
 uv --cache-dir .uv-cache run mypy src
 Success: no issues found in 35 source files
 ```
 
 ```text
 uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider
-16 passed, 1 skipped
+21 passed, 1 skipped
 ```
 
-在将 `docs/` 交接文档改为中文后，以上验证集已重新执行，结果仍然通过。
+在完成 P0 近期面试准备任务后，以上验证集已重新执行，结果通过。本轮新增的 runtime 集成测试不依赖真实 DeepSeek API，也不启动 Docker。
 
 ## 已知本地环境问题
 
@@ -95,6 +101,7 @@ fatal: detected dubious ownership in repository at 'D:/Software/CodingAgent'
 
 ```powershell
 uv --cache-dir .uv-cache run ruff check
+uv --cache-dir .uv-cache run mypy
 uv --cache-dir .uv-cache run mypy src
 uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider
 ```

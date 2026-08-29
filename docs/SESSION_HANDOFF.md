@@ -43,9 +43,12 @@
 - Patch 校验，覆盖敏感路径、二进制 patch、子模块、文件模式变化、符号链接、可执行权限变化、重命名、复制、changed-file 不一致和宿主并发修改。
 - JSONL session、checkpoint、transcript、summary、trace、artifact 和 application log。
 - 连续 chat session 的独占锁。
+- `src/coding_agent/py.typed` 包类型标记。
+- GitHub Actions 最小 CI workflow，运行 ruff、mypy 和 pytest。
 - 最小 memory 协议，目前是 Noop 实现。
 - 最小 eval report 契约。
-- 覆盖 policy、tools、sandbox、patch validation 和 sessions 的测试。
+- 覆盖 runtime、policy、tools、sandbox、patch validation 和 sessions 的测试。
+- `docs/THREAT_MODEL.md` 威胁模型文档。
 
 尚未实现：
 
@@ -62,21 +65,26 @@
 - 真正的 assistant 增量 streaming。
 - 多 agent 编排。
 - Worktree 隔离。
-- CI/CD。
+- coverage、pre-commit、release workflow、安全扫描和完整 CI/CD 发布流水线。
 
 ## 最近一次 Session
 
 本轮完成：
 
-- 将 `docs/` 下的交接文档体系改为中文表达。
-- 保留 `docs/SESSION_HANDOFF.md` 中的新 session 开场 prompt 和结束 prompt。
-- 保持 `README.md` 和 `CodingAgent.md` 不变。
+- 完成 P0 近期面试准备中列出的四项任务。
+- 新增 `src/coding_agent/py.typed`，使包作为 typed package 发布时可被类型检查器识别。
+- 新增 GitHub Actions CI workflow，运行 `ruff check`、包级 `mypy`、`mypy src` 和 `pytest`。
+- 新增 mock LLM runtime 集成测试，覆盖纯文本回答、一次工具调用、工具被拒绝、模型错误和取消。
+- 新增 `docs/THREAT_MODEL.md`，记录当前安全边界、威胁、已有控制和剩余风险。
+- 更新任务清单和验证说明。
 
 本轮修改文件：
 
-- `docs/ARCHITECTURE.md`
-- `docs/ROADMAP.md`
-- `docs/DECISIONS.md`
+- `.github/workflows/ci.yml`
+- `.gitignore`
+- `src/coding_agent/py.typed`
+- `tests/test_runtime.py`
+- `docs/THREAT_MODEL.md`
 - `docs/SESSION_HANDOFF.md`
 - `docs/TASKS.md`
 - `docs/VERIFICATION.md`
@@ -84,34 +92,35 @@
 最近一次验证结果：
 
 - `uv --cache-dir .uv-cache run ruff check`：通过。
+- `uv --cache-dir .uv-cache run mypy`：通过。
 - `uv --cache-dir .uv-cache run mypy src`：通过。
-- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider`：16 passed，1 skipped。
+- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider`：21 passed，1 skipped。
 
 注意事项：
 
 - 普通 `uv run pytest` 在 Codex 沙箱账户下可能失败，因为它会尝试写入 `C:\Users\HP\AppData\Local\Temp\pytest-of-HP`。
 - `git status` 可能因为 Git dubious ownership 失败，原因是仓库属于用户 Windows 账户，而 Codex 使用沙箱账户运行。除非用户明确要求，不要修改全局 Git 配置。
+- GitHub Actions workflow 已在仓库中新增，但本轮只完成了本地验证，没有观察远端 Actions 实际运行结果。
 
 ## 下一轮建议
 
 建议下一轮任务：
 
-增加 `src/coding_agent/py.typed`，并让包级 mypy 验证稳定通过。
+从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若继续按当前 backlog 推进，建议做 P1 的 `Model Gateway`；若优先补工程化，也可以先增加 coverage 或 pre-commit，但需要先把它们加入任务清单。
 
 建议 prompt：
 
 ```text
-本轮只做类型检查工程化，不做无关重构。请新增必要的 package typing 标记或配置，使 `uv --cache-dir .uv-cache run mypy` 和 `uv --cache-dir .uv-cache run mypy src` 都能通过。完成后运行 pytest、ruff、mypy，并更新 docs/SESSION_HANDOFF.md 和 docs/VERIFICATION.md。
+本轮只做 Model Gateway，不改变现有 DeepSeek 行为。请引入 provider registry，让 runtime 继续依赖供应商无关接口，增加 provider selection 的确定性测试。完成后运行 ruff、mypy、pytest，并更新 docs/SESSION_HANDOFF.md 和 docs/VERIFICATION.md。
 ```
 
 验收标准：
 
-- 现有行为不变。
-- `uv --cache-dir .uv-cache run mypy` 通过。
-- `uv --cache-dir .uv-cache run mypy src` 通过。
-- `uv --cache-dir .uv-cache run ruff check` 通过。
-- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider` 通过。
-- 更新 handoff 和 verification 文档。
+- DeepSeek adapter 继续可用。
+- Runtime 继续只依赖 `ModelAdapter` 协议。
+- Provider selection 有测试覆盖。
+- 现有安全边界不变。
+- `uv --cache-dir .uv-cache run ruff check`、`uv --cache-dir .uv-cache run mypy`、`uv --cache-dir .uv-cache run mypy src` 和 `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider` 通过。
 
 ## 后续 Session 工作规则
 

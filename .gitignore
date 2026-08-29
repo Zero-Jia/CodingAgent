@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .uv-cache/
+.codex-test-tmp/
 .pytest-tmp/
 .coding-agent/
 .env

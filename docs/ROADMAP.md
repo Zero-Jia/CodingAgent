@@ -18,8 +18,11 @@
 - 工作区敏感路径过滤。
 - JSONL session、checkpoint、transcript、trace、artifact 和 application log。
 - 最小 eval report 契约。
-- 面向 policy、tools、sandbox、patch validation 和 sessions 的基础测试。
+- 面向 runtime、policy、tools、sandbox、patch validation 和 sessions 的基础测试。
 - `ruff`、`mypy`、`pytest` 配置。
+- `src/coding_agent/py.typed` package typing 标记。
+- GitHub Actions 最小 CI workflow。
+- `docs/THREAT_MODEL.md` 威胁模型文档。
 
 当前尚未实现：
 
@@ -32,7 +35,7 @@
 - 上下文压缩。
 - 多 agent 编排。
 - Worktree 隔离。
-- CI/CD。
+- pre-commit、coverage、release workflow、安全扫描和完整 CI/CD 发布流水线。
 
 ## Phase 1：面试级工程基础
 
@@ -40,13 +43,13 @@
 
 任务：
 
-- 增加 `src/coding_agent/py.typed`。
-- 确保包级 `uv --cache-dir .uv-cache run mypy` 通过，而不只是 `mypy src` 通过。
-- 增加 GitHub Actions，运行 `pytest`、`ruff`、`mypy`。
+- 已完成：增加 `src/coding_agent/py.typed`。
+- 已完成：确保包级 `uv --cache-dir .uv-cache run mypy` 通过，而不只是 `mypy src` 通过。
+- 已完成：增加 GitHub Actions，运行 `pytest`、`ruff`、`mypy`。
 - 增加 pre-commit 配置。
 - 增加 coverage 报告。
-- 增加 mock LLM runtime 集成测试。
-- 如果安全说明需要更完整，增加 `docs/THREAT_MODEL.md`。
+- 已完成：增加 mock LLM runtime 集成测试。
+- 已完成：增加 `docs/THREAT_MODEL.md`。
 - 如果评测体系开始扩展，增加 `docs/EVALS.md`。
 - 增加常用面试 demo 脚本或示例 transcript。
 
