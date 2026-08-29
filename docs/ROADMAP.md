@@ -8,6 +8,7 @@
 
 - 基于 `src/coding_agent` 的 Python 3.12 包结构。
 - Typer CLI。
+- Model Gateway provider registry，当前注册 `deepseek`。
 - DeepSeek 模型适配器。
 - 供应商无关的模型和工具契约。
 - 事件驱动 runtime。
@@ -66,8 +67,8 @@
 
 任务：
 
-- 增加 model gateway 和 provider registry。
-- 保持现有 DeepSeek 行为不变，同时迁移到 gateway 后面。
+- 已完成：增加 model gateway 和 provider registry。
+- 已完成：保持现有 DeepSeek 行为不变，同时迁移到 gateway 后面。
 - 增加 OpenAI-compatible adapter。
 - 实现真正的增量 streaming 输出。
 - 增加带 token budget 的 context manager。

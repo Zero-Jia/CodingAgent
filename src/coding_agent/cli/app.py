@@ -9,7 +9,7 @@ from typing import Annotated
 import typer
 
 from coding_agent.agent.coding_agent import ChatSession, CodingAgent
-from coding_agent.ai.deepseek import DeepSeekAdapter
+from coding_agent.ai.gateway import ModelProviderError, create_model_adapter
 from coding_agent.config import AgentConfig
 from coding_agent.runtime.events import AgentEvent
 from coding_agent.runtime.loop import ApprovalProvider
@@ -35,6 +35,7 @@ class TerminalApproval(ApprovalProvider):
 
 def _build_agent(
     workspace: Path,
+    provider: str | None,
     model: str | None,
     allow_write: bool,
     allow_shell: bool,
@@ -42,22 +43,24 @@ def _build_agent(
     sandbox_image: str | None = None,
 ) -> CodingAgent:
     overrides: dict[str, object] = {
-        "model": model or "deepseek-chat",
         "allow_write": allow_write,
         "allow_shell": allow_shell,
         "non_interactive": non_interactive,
     }
+    if provider is not None:
+        overrides["model_provider"] = provider
+    if model is not None:
+        overrides["model"] = model
     if sandbox_image is not None:
         overrides["sandbox_image"] = sandbox_image
     config = AgentConfig.from_environment(
         workspace,
         **overrides,
     )
-    if config.deepseek_api_key is None:
-        raise typer.BadParameter("未设置 DEEPSEEK_API_KEY，无法运行真实 Agent")
-    adapter = DeepSeekAdapter(
-        config.model, config.deepseek_api_key.get_secret_value(), config.deepseek_base_url
-    )
+    try:
+        adapter = create_model_adapter(config)
+    except ModelProviderError as error:
+        raise typer.BadParameter(str(error), param_hint="--provider") from error
     return CodingAgent(config, adapter, None if non_interactive else TerminalApproval())
 
 
@@ -67,6 +70,7 @@ def run(
     workspace: Annotated[Path, typer.Option("--workspace", exists=True, file_okay=False)] = Path(
         "."
     ),
+    provider: Annotated[str | None, typer.Option("--provider")] = None,
     model: Annotated[str | None, typer.Option("--model")] = None,
     allow_write: Annotated[bool, typer.Option("--allow-write")] = False,
     allow_shell: Annotated[bool, typer.Option("--allow-shell")] = False,
@@ -77,7 +81,7 @@ def run(
     asyncio.run(
         _run_once(
             _build_agent(
-                workspace, model, allow_write, allow_shell, non_interactive, sandbox_image
+                workspace, provider, model, allow_write, allow_shell, non_interactive, sandbox_image
             ),
             task,
         )
@@ -89,6 +93,7 @@ def chat(
     workspace: Annotated[Path, typer.Option("--workspace", exists=True, file_okay=False)] = Path(
         "."
     ),
+    provider: Annotated[str | None, typer.Option("--provider")] = None,
     model: Annotated[str | None, typer.Option("--model")] = None,
     allow_write: Annotated[bool, typer.Option("--allow-write")] = False,
     allow_shell: Annotated[bool, typer.Option("--allow-shell")] = False,
@@ -99,7 +104,7 @@ def chat(
 ) -> None:
     """启动独占的连续聊天会话。"""
     agent = _build_agent(
-        workspace, model, allow_write, allow_shell, non_interactive, sandbox_image
+        workspace, provider, model, allow_write, allow_shell, non_interactive, sandbox_image
     )
     asyncio.run(_chat_loop(agent, resume, force_unlock))
 

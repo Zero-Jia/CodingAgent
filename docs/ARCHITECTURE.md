@@ -4,7 +4,7 @@
 
 ## 当前定位
 
-`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、DeepSeek 模型适配器、事件驱动运行时、Docker 沙箱执行、基于 patch 的宿主机写回、JSONL 会话持久化、脱敏 trace 存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
+`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、Model Gateway 与 DeepSeek 模型适配器、事件驱动运行时、Docker 沙箱执行、基于 patch 的宿主机写回、JSONL 会话持久化、脱敏 trace 存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
 
 当前项目还不是完整企业级平台。它尚未实现 Web UI、FastAPI 服务、PostgreSQL、Milvus、Redis、MCP、Skills、Hooks、真实 memory 检索、上下文压缩、多 agent 编排和 worktree 隔离。
 
@@ -38,17 +38,19 @@
 当前文件：
 
 - `contracts.py`：模型、消息、工具调用、usage、流式事件等供应商无关契约。
+- `gateway.py`：provider registry 和 adapter 工厂。
 - `deepseek.py`：基于 OpenAI-compatible Chat Completions SSE 协议的 DeepSeek 适配器。
 
 当前状态：
 
-- DeepSeek 是唯一真实模型供应商。
+- Model Gateway 负责根据配置选择 provider 并创建 adapter。
+- DeepSeek 是唯一已实现的真实模型供应商。
 - Runtime 依赖 `ModelAdapter` 协议，而不是直接依赖 DeepSeek。
+- CLI 只传递 provider 和 model 配置，不直接构造 `DeepSeekAdapter`。
 - 工具调用通过统一的 `ToolCall` 对象表达。
 
 后续工作：
 
-- 增加 provider registry。
 - 增加 OpenAI Responses API 支持。
 - 增加 Anthropic Messages API 支持。
 - 增加 OpenAI-compatible 私有模型网关支持。
@@ -315,6 +317,6 @@ uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovid
 - `ruff check`：通过。
 - `mypy`：通过。
 - `mypy src`：通过。
-- `pytest`：21 passed，1 skipped。
+- `pytest`：28 passed，1 skipped。
 
 普通 `uv run pytest` 在 Codex 沙箱账户下可能失败，因为它可能尝试写入 `C:\Users\HP\AppData\Local\Temp\pytest-of-HP`。

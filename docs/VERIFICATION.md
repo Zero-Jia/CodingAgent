@@ -39,20 +39,20 @@ All checks passed!
 
 ```text
 uv --cache-dir .uv-cache run mypy
-Success: no issues found in 35 source files
+Success: no issues found in 36 source files
 ```
 
 ```text
 uv --cache-dir .uv-cache run mypy src
-Success: no issues found in 35 source files
+Success: no issues found in 36 source files
 ```
 
 ```text
 uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider
-21 passed, 1 skipped
+28 passed, 1 skipped
 ```
 
-在完成 P0 近期面试准备任务后，以上验证集已重新执行，结果通过。本轮新增的 runtime 集成测试不依赖真实 DeepSeek API，也不启动 Docker。
+在完成 P1 `Model Gateway` 任务后，以上验证集已重新执行，结果通过。本轮新增的 provider selection 测试不依赖真实 DeepSeek API，也不启动 Docker。
 
 ## 已知本地环境问题
 

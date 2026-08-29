@@ -33,6 +33,7 @@
 
 - `src/coding_agent` 下的 Python 包结构。
 - Typer CLI，支持一次性 `run` 和连续 `chat` 模式。
+- Model Gateway provider registry，当前已实现 `deepseek` provider。
 - DeepSeek 模型适配器。
 - 供应商无关的模型、消息、工具调用、usage 和事件契约。
 - 事件驱动 runtime，支持工具执行、审批流、取消、trace 写入和 artifact 写入。
@@ -71,20 +72,24 @@
 
 本轮完成：
 
-- 完成 P0 近期面试准备中列出的四项任务。
-- 新增 `src/coding_agent/py.typed`，使包作为 typed package 发布时可被类型检查器识别。
-- 新增 GitHub Actions CI workflow，运行 `ruff check`、包级 `mypy`、`mypy src` 和 `pytest`。
-- 新增 mock LLM runtime 集成测试，覆盖纯文本回答、一次工具调用、工具被拒绝、模型错误和取消。
-- 新增 `docs/THREAT_MODEL.md`，记录当前安全边界、威胁、已有控制和剩余风险。
-- 更新任务清单和验证说明。
+- 完成 P1 Runtime 成熟化中的 `Model Gateway` 任务。
+- 新增 `coding_agent.ai.gateway`，通过 provider registry 创建模型 adapter。
+- 当前 registry 只注册 `deepseek`，保持现有 DeepSeek 默认行为不变。
+- `AgentConfig` 新增 `model_provider`，支持 `CODING_AGENT_MODEL_PROVIDER` 和 `CODING_AGENT_MODEL`。
+- CLI 新增 `--provider` 参数，并改为通过 gateway 创建 adapter，不再直接构造 `DeepSeekAdapter`。
+- 新增 provider selection 测试，覆盖 DeepSeek、未知 provider、缺少 key、环境变量和显式覆盖。
+- 更新 README、架构、路线图、任务清单和验证说明。
 
 本轮修改文件：
 
-- `.github/workflows/ci.yml`
-- `.gitignore`
-- `src/coding_agent/py.typed`
-- `tests/test_runtime.py`
-- `docs/THREAT_MODEL.md`
+- `src/coding_agent/ai/gateway.py`
+- `src/coding_agent/ai/__init__.py`
+- `src/coding_agent/config.py`
+- `src/coding_agent/cli/app.py`
+- `tests/test_model_gateway.py`
+- `README.md`
+- `docs/ARCHITECTURE.md`
+- `docs/ROADMAP.md`
 - `docs/SESSION_HANDOFF.md`
 - `docs/TASKS.md`
 - `docs/VERIFICATION.md`
@@ -94,7 +99,7 @@
 - `uv --cache-dir .uv-cache run ruff check`：通过。
 - `uv --cache-dir .uv-cache run mypy`：通过。
 - `uv --cache-dir .uv-cache run mypy src`：通过。
-- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider`：21 passed，1 skipped。
+- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider`：28 passed，1 skipped。
 
 注意事项：
 
@@ -106,19 +111,19 @@
 
 建议下一轮任务：
 
-从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若继续按当前 backlog 推进，建议做 P1 的 `Model Gateway`；若优先补工程化，也可以先增加 coverage 或 pre-commit，但需要先把它们加入任务清单。
+从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若继续按当前 backlog 推进，建议做 P1 的 `真正的 Streaming Delta`；若优先补工程化，也可以先增加 coverage 或 pre-commit，但需要先把它们加入任务清单。
 
 建议 prompt：
 
 ```text
-本轮只做 Model Gateway，不改变现有 DeepSeek 行为。请引入 provider registry，让 runtime 继续依赖供应商无关接口，增加 provider selection 的确定性测试。完成后运行 ruff、mypy、pytest，并更新 docs/SESSION_HANDOFF.md 和 docs/VERIFICATION.md。
+本轮只做真正的 Streaming Delta，不重构无关模块。请让 assistant 文本在模型返回时增量输出，同时保证 session checkpoint 仍保存完整 assistant 内容。增加确定性测试覆盖流式 chunk，完成后运行 ruff、mypy、pytest，并更新 docs/SESSION_HANDOFF.md 和 docs/VERIFICATION.md。
 ```
 
 验收标准：
 
-- DeepSeek adapter 继续可用。
-- Runtime 继续只依赖 `ModelAdapter` 协议。
-- Provider selection 有测试覆盖。
+- CLI 可以渲染 assistant 文本增量输出。
+- 最终 session checkpoint 保存完整 assistant 内容。
+- 流式 chunk 有测试覆盖。
 - 现有安全边界不变。
 - `uv --cache-dir .uv-cache run ruff check`、`uv --cache-dir .uv-cache run mypy`、`uv --cache-dir .uv-cache run mypy src` 和 `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider` 通过。
 

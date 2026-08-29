@@ -21,6 +21,9 @@ uv run agent chat --workspace . --allow-shell
 
 # 预先授权沙箱命令与补丁回写
 uv run agent chat --workspace . --allow-write --allow-shell
+
+# 显式选择模型 provider 和模型名；当前已实现 provider 为 deepseek
+uv run agent chat --workspace . --provider deepseek --model deepseek-chat
 ```
 
 `agent chat` 是连续会话模式：同一个终端中的每次提问都会复用会话上下文。输入 `/help` 查看命令，输入 `/exit` 保存并退出。同一会话只能由一个终端持有；异常退出后的失效锁可在确认原进程不在运行后使用 `--force-unlock` 清理。
@@ -61,12 +64,16 @@ uv run agent run "检查仓库并建议最小修复" --workspace . --model deeps
 
 ```powershell
 $env:DEEPSEEK_API_KEY = "你的本地密钥"
+$env:CODING_AGENT_MODEL_PROVIDER = "deepseek"
+$env:CODING_AGENT_MODEL = "deepseek-chat"
 $env:DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 $env:DEEPSEEK_MODEL = "deepseek-chat"
 $env:CODING_AGENT_SANDBOX_IMAGE = "coding-agent-sandbox:python-3.12"
 ```
 
-适配器使用兼容 OpenAI 的 DeepSeek Chat Completions SSE 协议。所有 Agent 运行均使用真实 DeepSeek 配置。
+`CODING_AGENT_MODEL_PROVIDER` 决定使用哪个模型适配器，`CODING_AGENT_MODEL` 决定传给该 provider 的具体模型名。当前版本只实现 `deepseek` provider；不设置 provider 时默认使用 `deepseek`，不设置模型名时默认使用 `deepseek-chat`。`DEEPSEEK_MODEL` 仍作为 DeepSeek 专属模型名回退变量保留。
+
+DeepSeek 适配器使用兼容 OpenAI 的 Chat Completions SSE 协议。所有 Agent 运行均使用真实模型配置。
 
 ## 架构
 

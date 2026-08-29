@@ -72,7 +72,7 @@
 
 ### 5. Model Gateway
 
-状态：未开始。
+状态：已完成。
 
 任务：
 
@@ -83,6 +83,13 @@
 - DeepSeek adapter 继续可用。
 - Runtime 继续依赖供应商无关接口。
 - 测试覆盖 provider selection。
+
+完成记录：
+
+- 新增 `coding_agent.ai.gateway`，集中创建模型 adapter。
+- 配置新增 `model_provider`，默认仍为 `deepseek`。
+- CLI 新增 `--provider`，并改为通过 gateway 创建 adapter。
+- 新增 `tests/test_model_gateway.py`，覆盖 DeepSeek selection、未知 provider、缺少 key、环境变量和显式覆盖。
 
 ### 6. 真正的 Streaming Delta
 

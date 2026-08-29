@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, SecretStr
 
 class AgentConfig(BaseModel):
     workspace: Path
+    model_provider: str = "deepseek"
     model: str = "deepseek-chat"
     deepseek_base_url: str = "https://api.deepseek.com/v1"
     deepseek_api_key: SecretStr | None = Field(default=None, exclude=True)
@@ -32,9 +33,13 @@ class AgentConfig(BaseModel):
     def from_environment(cls, workspace: Path, **overrides: object) -> AgentConfig:
         key = os.environ.get("DEEPSEEK_API_KEY")
         base = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-        model = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+        provider = os.environ.get("CODING_AGENT_MODEL_PROVIDER", "deepseek")
+        model = os.environ.get("CODING_AGENT_MODEL") or os.environ.get(
+            "DEEPSEEK_MODEL", "deepseek-chat"
+        )
         payload: dict[str, object] = {
             "workspace": workspace.resolve(),
+            "model_provider": overrides.pop("model_provider", provider),
             "model": overrides.pop("model", model),
             "deepseek_base_url": base,
             "deepseek_api_key": SecretStr(key) if key else None,
