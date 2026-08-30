@@ -107,11 +107,14 @@ MewCode 功能丰富，但它更偏本地终端产品。对于企业级安全项
 
 ### 4.2 上下文管理不足
 
-当前只有简单的 `max_history_messages` 裁剪，没有真正的 token budget、自动压缩和检索增强。最终需要支持：
+当前已有确定性 context manager，支持 token 估算、自动 compact、近期尾部原文保留和
+tool call/result 配对保护。CLI 已能基于 provider usage 显示 session 累计 token 消耗、
+当前上下文 token、窗口占比和 compact 节省量。它尚未实现模型辅助摘要、上下文窗口
+自动探测和检索增强。
+最终需要支持：
 
-- token 估算
 - 上下文窗口检测
-- 自动 compact
+- 模型辅助 compact summary
 - 工具输出分级摘要
 - 大输出落盘
 - compact 后恢复关键文件
@@ -822,6 +825,7 @@ src/coding_agent/
   runtime/
     loop.py
     context.py
+    token_usage.py
     events.py
     planner.py
     recovery.py

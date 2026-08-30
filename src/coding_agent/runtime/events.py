@@ -26,6 +26,18 @@ class ReasoningDelta(AgentEventBase):
     type: Literal["reasoning_delta"] = "reasoning_delta"
 
 
+class ContextCompacted(AgentEventBase):
+    type: Literal["context_compacted"] = "context_compacted"
+
+
+class ModelUsageReported(AgentEventBase):
+    type: Literal["model_usage_reported"] = "model_usage_reported"
+
+
+class TokenUsageUpdated(AgentEventBase):
+    type: Literal["token_usage_updated"] = "token_usage_updated"
+
+
 class ToolStarted(AgentEventBase):
     type: Literal["tool_started"] = "tool_started"
 
@@ -62,6 +74,9 @@ AgentEvent = (
     RunStarted
     | MessageDelta
     | ReasoningDelta
+    | ContextCompacted
+    | ModelUsageReported
+    | TokenUsageUpdated
     | ToolStarted
     | ToolUpdated
     | ToolFinished

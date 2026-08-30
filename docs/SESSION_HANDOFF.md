@@ -37,6 +37,8 @@
 - DeepSeek 模型适配器。
 - 供应商无关的模型、消息、工具调用、usage 和事件契约。
 - 事件驱动 runtime，支持工具执行、审批流、取消、trace 写入和 artifact 写入。
+- 确定性 context manager，支持 token 预算触发、自动 compact、近期尾部保留和 tool call/result 边界保护。
+- Session 级 token usage 账本，支持 provider usage 累计统计、当前上下文 token、窗口占比和 compact 节省量展示。
 - 只读仓库工具：`read`、`search`、`git_diff`。
 - Docker 沙箱工具：`sandbox_shell` 和 `verify`。
 - 通过 `apply_patch` 实现 patch-only 宿主机写回。
@@ -62,7 +64,7 @@
 - Skills。
 - Hooks。
 - 真实 memory 检索。
-- 上下文压缩。
+- 模型辅助上下文摘要。
 - 多 agent 编排。
 - Worktree 隔离。
 - coverage、pre-commit、release workflow、安全扫描和完整 CI/CD 发布流水线。
@@ -71,17 +73,30 @@
 
 本轮完成：
 
-- 完成 P1 Runtime 成熟化中的 `真正的 Streaming Delta` 任务。
-- Runtime 收到模型 `TextDelta` 后立即发出 `message_delta` 事件，而不是等最终回答结束后一次性输出。
-- Runtime 仍累积完整 assistant 文本，并将完整内容写入模型消息历史，保证后续 checkpoint 可以保存完整 assistant 内容。
-- 增加部分文本已经输出后遇到 retryable model error 的保守处理：不再静默重试，避免用户可见输出和模型历史发生错位。
-- 增加 runtime 测试，覆盖纯文本多 chunk、工具调用前文本增量输出、部分文本输出后 retry 边界。
-- 更新架构、任务清单、交接和验证说明。
+- 完成 `Token Usage Accounting` 能力。
+- Runtime 将模型 adapter 返回的 `UsageEvent` 提升为 `model_usage_reported`，并保证该事件在 assistant 消息写入历史之后发出。
+- 新增 `coding_agent.runtime.token_usage`，用 provider usage 统计 session 累计输入、输出和总 token。
+- 当前上下文 token 使用“provider usage 锚点 + 锚点后新增消息估算”；无锚点、恢复会话或 compact 后退回确定性字符估算。
+- `ChatSession` 聚合 usage 后发出 `token_usage_updated`，并把 token 指标写入 session event 和 summary。
+- CLI 在运行中收到 usage 后输出 token 状态，`/status` 显示累计消耗、当前上下文 token、窗口占比和最近 compact 节省量。
+- CLI `/exit` 和 EOF/Ctrl+C 退出时会输出可直接用于恢复当前 session 的 `uv --cache-dir .uv-cache run agent chat --workspace ... --resume ...` 指令。
+- 参考了 `D:\Software\MewCode` 中 `record_usage_anchor/current_tokens` 的真实锚点加增量估算思路。
 
 本轮修改文件：
 
+- `src/coding_agent/runtime/context.py`
+- `src/coding_agent/runtime/token_usage.py`
+- `src/coding_agent/runtime/events.py`
 - `src/coding_agent/runtime/loop.py`
+- `src/coding_agent/agent/coding_agent.py`
+- `src/coding_agent/sessions/store.py`
+- `src/coding_agent/cli/app.py`
+- `src/coding_agent/config.py`
+- `tests/test_context_manager.py`
+- `tests/test_token_usage.py`
 - `tests/test_runtime.py`
+- `tests/test_cli.py`
+- `CodingAgent.md`
 - `docs/ARCHITECTURE.md`
 - `docs/ROADMAP.md`
 - `docs/SESSION_HANDOFF.md`
@@ -90,11 +105,12 @@
 
 最近一次验证结果：
 
-- `uv --cache-dir .uv-cache run pytest tests/test_runtime.py --basetemp .codex-test-tmp-stream -p no:cacheprovider`：7 passed。
 - `uv --cache-dir .uv-cache run ruff check`：通过。
 - `uv --cache-dir .uv-cache run mypy`：通过。
 - `uv --cache-dir .uv-cache run mypy src`：通过。
-- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-stream-all -p no:cacheprovider`：30 passed，1 skipped。
+- `uv --cache-dir .uv-cache run pytest tests/test_token_usage.py tests/test_runtime.py --basetemp .codex-test-tmp-token-targeted -p no:cacheprovider`：13 passed。
+- `uv --cache-dir .uv-cache run pytest tests/test_cli.py --basetemp .codex-test-tmp-cli-exit -p no:cacheprovider`：1 passed。
+- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-cli-exit-final -p no:cacheprovider`：43 passed，1 skipped。
 
 注意事项：
 
@@ -102,24 +118,26 @@
 - `git status` 可能因为 Git dubious ownership 失败，原因是仓库属于用户 Windows 账户，而 Codex 使用沙箱账户运行。除非用户明确要求，不要修改全局 Git 配置。
 - GitHub Actions workflow 已在仓库中新增，但本轮只完成了本地验证，没有观察远端 Actions 实际运行结果。
 - 本轮第一次使用 `--basetemp .codex-test-tmp` 运行 runtime 测试时，被旧临时目录权限问题拦截；改用新的 `.codex-test-tmp-stream` 后通过。
+- Token 消耗累计值只有在 provider 返回 usage 时才是精确值；当前上下文 token 在 provider 锚点之后仍会对新增尾部消息做估算。
+- Context summary 当前是确定性抽取摘要，不调用模型；后续可增加模型辅助摘要，但必须保留 fake adapter 测试和审计事件。
 
 ## 下一轮建议
 
 建议下一轮任务：
 
-从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若继续按当前 backlog 推进，建议做 P1 的 `Context Manager`；若优先补工程化，也可以先增加 coverage 或 pre-commit，但需要先把它们加入任务清单。
+从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若继续按当前 backlog 推进，建议做 P1 的 `Plan Mode`；若优先补工程化，也可以先增加 coverage 或 pre-commit，但需要先把它们加入任务清单。
 
 建议 prompt：
 
 ```text
-本轮只做 Context Manager，不重构无关模块。请增加负责 token budget 和自动 compact 的上下文管理器，让长历史通过摘要保留而不是简单截断。增加确定性测试覆盖 compact 边界，完成后运行 ruff、mypy、pytest，并更新 docs/SESSION_HANDOFF.md 和 docs/VERIFICATION.md。
+本轮只做 Plan Mode，不重构无关模块。请增加计划模式，让模型在使用 sandbox 或 patch 工具前必须先产出计划并通过审批。增加确定性测试覆盖批准和拒绝路径，完成后运行 ruff、mypy、pytest，并更新 docs/SESSION_HANDOFF.md 和 docs/VERIFICATION.md。
 ```
 
 验收标准：
 
-- 长历史通过摘要保留，而不是简单截断。
-- 最近工具结果和重要文件得到保留。
-- compact 边界有测试覆盖。
+- 使用 sandbox 或 patch 工具前需要计划审批。
+- 非交互模式默认拒绝未审批执行。
+- 批准和拒绝路径有测试覆盖。
 - 现有安全边界不变。
 - `uv --cache-dir .uv-cache run ruff check`、`uv --cache-dir .uv-cache run mypy`、`uv --cache-dir .uv-cache run mypy src` 和 `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider` 通过。
 

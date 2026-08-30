@@ -113,7 +113,7 @@
 
 ### 7. Context Manager
 
-状态：未开始。
+状态：已完成。
 
 任务：
 
@@ -125,7 +125,38 @@
 - 最近工具结果和重要文件得到保留。
 - 测试覆盖 compact 边界。
 
-### 8. Plan Mode
+完成记录：
+
+- 新增 `coding_agent.runtime.context`，实现 token 估算、compact 阈值、近期尾部保留和 tool call/result 配对保护。
+- `ChatSession` 在每轮模型调用前执行 context manager，compact 发生时发出 `context_compacted` 事件。
+- Compact 会写入 session event 和 trace，并保存到后续 checkpoint。
+- 当前摘要是确定性抽取摘要，不依赖真实模型 API。
+- 测试覆盖不触发 compact、长历史 compact、tool 配对边界、摘要脱敏和 checkpoint 持久化。
+
+### 8. Token Usage Accounting
+
+状态：已完成。
+
+任务：
+
+增加 session 级 token usage 账本，在 CLI 中实时展示 provider usage、当前上下文 token、窗口占比和 compact 节省量。
+
+验收标准：
+
+- Provider 返回 usage 时，session 累计 token 消耗使用真实 provider 数值。
+- 当前上下文 token 有 provider usage 锚点时只估算锚点后的新增消息；无锚点或 compact 后退回整体估算。
+- CLI 运行中和 `/status` 都能展示累计消耗、上下文 token、窗口占比和最近 compact 节省量。
+- 测试覆盖账本、runtime usage 事件、session summary 和 CLI 展示。
+
+完成记录：
+
+- 新增 `coding_agent.runtime.token_usage`，实现 `SessionTokenState` 和 `TokenSnapshot`。
+- Runtime 将模型 usage 提升为 `model_usage_reported`；`ChatSession` 聚合后发出 `token_usage_updated`。
+- Session summary 持久化累计输入、输出、总 token、当前上下文 token、窗口占比和 compact 节省量。
+- CLI 在实时流和 `/status` 中展示 token 指标。
+- 参考了 `D:\Software\MewCode` 中 `record_usage_anchor/current_tokens` 的“真实锚点 + 增量估算”思路。
+
+### 9. Plan Mode
 
 状态：未开始。
 
@@ -141,7 +172,7 @@
 
 ## P2：企业平台能力
 
-### 9. FastAPI 服务
+### 10. FastAPI 服务
 
 状态：未开始。
 
@@ -157,7 +188,7 @@
 - API 可以流式返回事件。
 - API 可以取消 run。
 
-### 10. PostgreSQL 存储
+### 11. PostgreSQL 存储
 
 状态：未开始。
 
@@ -172,7 +203,7 @@
 - JSONL 仍可作为本地模式使用。
 - JSONL 和 PostgreSQL store 都通过 repository contract tests。
 
-### 11. 审批 UI
+### 12. 审批 UI
 
 状态：未开始。
 
@@ -189,7 +220,7 @@
 
 ## P3：知识检索和多 Agent
 
-### 12. Milvus 语义索引
+### 13. Milvus 语义索引
 
 状态：未开始。
 
@@ -203,7 +234,7 @@
 - Semantic search 可以作为工具被调用。
 - 测试使用 fake embedding 或本地 stub。
 
-### 13. Memory Store 和 Recall
+### 14. Memory Store 和 Recall
 
 状态：未开始。
 
@@ -217,7 +248,7 @@
 - Recall 可以把相关 memory 注入上下文。
 - Memory 包含 source session、confidence、status 和 timestamps。
 
-### 14. MCP 集成
+### 15. MCP 集成
 
 状态：未开始。
 
@@ -231,7 +262,7 @@
 - MCP 调用经过 policy 和 trace。
 - 工具结果受输出预算和脱敏策略约束。
 
-### 15. Worktree 隔离的多 Agent
+### 16. Worktree 隔离的多 Agent
 
 状态：未开始。
 

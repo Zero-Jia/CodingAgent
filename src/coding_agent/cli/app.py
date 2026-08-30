@@ -131,13 +131,13 @@ async def _chat_loop(agent: CodingAgent, resume_id: str | None, force_unlock: bo
             try:
                 raw = await asyncio.to_thread(input, "\n你> ")
             except (EOFError, KeyboardInterrupt):
-                typer.echo("\n会话已保存，再见。")
+                typer.echo("\n" + _exit_text(session))
                 return
             command = raw.strip()
             if not command:
                 continue
             if command == "/exit":
-                typer.echo("会话已保存，再见。")
+                typer.echo(_exit_text(session))
                 return
             if command == "/help":
                 typer.echo(_help_text())
@@ -194,6 +194,17 @@ def _render_event(event: AgentEvent) -> None:
                 f"\n工具未成功：{event.payload.get('tool')}，"
                 f"{tool_result.get('summary', '未知原因')}{suffix}"
             )
+    elif event.type == "context_compacted":
+        before = _payload_int(event.payload, "before_tokens")
+        after = _payload_int(event.payload, "after_tokens")
+        saved = max(0, before - after)
+        typer.echo(
+            f"\n上下文已压缩：{before:,} -> {after:,} token，节省 {saved:,} token"
+        )
+    elif event.type == "token_usage_updated":
+        source = str(event.payload.get("source", "context_estimate"))
+        if source in {"provider_usage", "context_compaction", "context_cleared"}:
+            typer.echo("\n" + _token_usage_line(event.payload))
     elif event.type in {"run_failed", "run_cancelled"}:
         typer.echo(f"\n运行结束：{event.payload.get('reason', event.type)}")
 
@@ -206,17 +217,89 @@ def _help_text() -> str:
     )
 
 
+def _exit_text(session: ChatSession) -> str:
+    workspace = _quote_cli_arg(str(session._agent.config.workspace))
+    return (
+        "会话已保存，再见。\n"
+        "下次继续本会话可运行：\n"
+        f"uv --cache-dir .uv-cache run agent chat --workspace {workspace} "
+        f"--resume {session.session_id}"
+    )
+
+
+def _quote_cli_arg(value: str) -> str:
+    if value and not any(char.isspace() for char in value) and '"' not in value:
+        return value
+    return '"' + value.replace('"', '\\"') + '"'
+
+
 def _status_text(session: ChatSession) -> str:
     summary = session.summary
+    snapshot = session.token_snapshot()
     return (
         f"会话 ID：{summary.session_id}\n模型：{summary.model_name}\n"
         f"上下文消息：{summary.message_count}\n"
         f"运行：{summary.run_count}，工具：{summary.tool_count}，审批：{summary.approval_count}\n"
         f"最近状态：{summary.last_status}；失败：{summary.failed_count}；取消：{summary.cancelled_count}\n"
+        f"Token 消耗：{snapshot.session_total_tokens:,}（输入 "
+        f"{snapshot.session_prompt_tokens:,}，输出 {snapshot.session_completion_tokens:,}）\n"
+        f"当前上下文：{snapshot.current_context_tokens:,} / "
+        f"{snapshot.context_window_tokens:,} token"
+        f"（{_format_ratio(snapshot.context_usage_ratio)}，"
+        f"{_context_source_label(snapshot.current_context_source)}）\n"
+        f"最近压缩：节省 {snapshot.last_compacted_tokens_saved:,} token"
+        f"（累计 {snapshot.total_compacted_tokens_saved:,}）\n"
         f"累计运行时间：{summary.total_duration_ms:.0f} ms\n"
         f"授权：write={'是' if session._agent.config.allow_write else '否'}，"
         f"Docker 沙箱={'是' if session._agent.config.allow_shell else '否'}"
     )
+
+
+def _token_usage_line(payload: dict[str, object]) -> str:
+    total = _payload_int(payload, "session_total_tokens")
+    prompt = _payload_int(payload, "session_prompt_tokens")
+    completion = _payload_int(payload, "session_completion_tokens")
+    current = _payload_int(payload, "current_context_tokens")
+    window = _payload_int(payload, "context_window_tokens")
+    ratio = _payload_float(payload, "context_usage_ratio")
+    source = str(payload.get("current_context_source", "estimated"))
+    saved = _payload_int(payload, "last_compacted_tokens_saved")
+    compact = f"；最近压缩节省 {saved:,}" if saved else ""
+    return (
+        f"Token：本会话 {total:,}（输入 {prompt:,}，输出 {completion:,}）；"
+        f"上下文 {current:,} / {window:,}（{_format_ratio(ratio)}，"
+        f"{_context_source_label(source)}）{compact}"
+    )
+
+
+def _payload_int(payload: dict[str, object], key: str) -> int:
+    value = payload.get(key, 0)
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return 0
+
+
+def _payload_float(payload: dict[str, object], key: str) -> float:
+    value = payload.get(key, 0.0)
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, int | float):
+        return float(value)
+    return 0.0
+
+
+def _format_ratio(ratio: float) -> str:
+    return f"{ratio * 100:.1f}%"
+
+
+def _context_source_label(source: str) -> str:
+    if source == "anchored":
+        return "provider usage 锚定"
+    return "估算"
 
 
 async def _print_sessions(agent: CodingAgent) -> None:

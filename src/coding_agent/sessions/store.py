@@ -49,6 +49,17 @@ class SessionSummary(BaseModel):
     cancelled_count: int = 0
     failed_count: int = 0
     total_duration_ms: float = 0.0
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    total_tokens: int = 0
+    current_context_tokens: int = 0
+    context_window_tokens: int = 0
+    context_usage_ratio: float = 0.0
+    current_context_source: str = "estimated"
+    last_compact_before_tokens: int = 0
+    last_compact_after_tokens: int = 0
+    last_compacted_tokens_saved: int = 0
+    total_compacted_tokens_saved: int = 0
 
 
 class SessionStore(Protocol):

@@ -26,7 +26,12 @@ class AgentConfig(BaseModel):
     max_turns: int = 8
     max_tool_calls: int = 24
     max_tool_output_chars: int = 12_000
-    max_history_messages: int = 32
+    context_window_tokens: int = 128_000
+    context_compact_threshold_tokens: int = 96_000
+    context_keep_recent_tokens: int = 12_000
+    context_keep_recent_messages: int = 6
+    context_chars_per_token: float = 3.5
+    context_summary_max_chars: int = 8_000
     trace_level: str = "redacted"
 
     @classmethod

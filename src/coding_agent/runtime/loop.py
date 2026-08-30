@@ -16,6 +16,7 @@ from coding_agent.ai.contracts import (
     TextDelta,
     ToolCall,
     ToolCallCompleted,
+    Usage,
     UsageEvent,
 )
 from coding_agent.policy.engine import PolicyEngine
@@ -24,6 +25,7 @@ from coding_agent.runtime.events import (
     ApprovalRequested,
     ApprovalResolved,
     MessageDelta,
+    ModelUsageReported,
     ReasoningDelta,
     RunCancelled,
     RunFailed,
@@ -109,6 +111,7 @@ class AgentRuntime:
             )
             completed_calls: list[ToolCall] = []
             assistant_text: list[str] = []
+            last_usage: Usage | None = None
             retryable_error = False
             async for event in self.model.stream(request, self.cancel_signal):
                 if self.cancel_signal.is_set():
@@ -129,10 +132,11 @@ class AgentRuntime:
                 elif event.type == "reasoning_delta":
                     yield ReasoningDelta(
                         session_id=session_id, run_id=run_id, payload={"text": event.text}
-                    )
+                        )
                 elif isinstance(event, ToolCallCompleted):
                     completed_calls.append(event.call)
                 elif isinstance(event, UsageEvent):
+                    last_usage = event.usage
                     await self._trace(
                         session_id, run_id, "model_usage", "model", event.usage.model_dump()
                     )
@@ -169,6 +173,12 @@ class AgentRuntime:
                         content="".join(assistant_text),
                         tool_calls=completed_calls,
                     )
+                )
+            if last_usage is not None:
+                yield ModelUsageReported(
+                    session_id=session_id,
+                    run_id=run_id,
+                    payload=last_usage.model_dump(),
                 )
             if not completed_calls:
                 yield RunFinished(session_id=session_id, run_id=run_id, payload={"turns": turn})

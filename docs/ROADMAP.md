@@ -13,6 +13,8 @@
 - 供应商无关的模型和工具契约。
 - 事件驱动 runtime。
 - 真正的 assistant 文本增量 streaming，runtime 会逐个转发模型 `TextDelta`。
+- 确定性 context manager，支持 token 预算触发、自动 compact、近期尾部保留和 tool call/result 边界保护。
+- Session 级 token usage 账本，基于 provider usage 统计累计消耗，并在 CLI 中显示当前上下文 token 和窗口占比。
 - `read`、`search`、`git_diff` 只读工具。
 - Docker 无网络沙箱命令工具。
 - 单独的 `verify` 工具，沙箱变更会被丢弃。
@@ -34,7 +36,7 @@
 - Skills。
 - Hooks。
 - 真实 memory 检索。
-- 上下文压缩。
+- 模型辅助上下文摘要。
 - 多 agent 编排。
 - Worktree 隔离。
 - pre-commit、coverage、release workflow、安全扫描和完整 CI/CD 发布流水线。
@@ -72,8 +74,10 @@
 - 已完成：保持现有 DeepSeek 行为不变，同时迁移到 gateway 后面。
 - 增加 OpenAI-compatible adapter。
 - 已完成：实现真正的增量 streaming 输出。
-- 增加带 token budget 的 context manager。
-- 增加自动 compact。
+- 已完成：增加带 token budget 的 context manager。
+- 已完成：增加自动 compact。
+- 已完成：增加 provider usage 统计、session token 账本和 CLI token 状态展示。
+- 增加模型辅助 compact summary。
 - 增加工具输出摘要策略。
 - 增加 plan mode：先计划，审批后执行。
 - 增加 CLI slash command registry。

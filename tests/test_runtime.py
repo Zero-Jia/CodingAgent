@@ -18,6 +18,8 @@ from coding_agent.ai.contracts import (
     ToolCall,
     ToolCallCompleted,
     ToolDefinition,
+    Usage,
+    UsageEvent,
 )
 from coding_agent.policy.engine import PolicyEngine
 from coding_agent.runtime.events import AgentEvent
@@ -143,6 +145,36 @@ async def test_runtime_returns_plain_text_answer(tmp_path: Path) -> None:
     assert events[2].payload["text"] == " world"
     assert messages[-1].role == "assistant"
     assert messages[-1].content == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_runtime_reports_model_usage_after_assistant_message(tmp_path: Path) -> None:
+    model = FakeModelAdapter(
+        [
+            [
+                TextDelta(text="hello"),
+                UsageEvent(usage=Usage(prompt_tokens=10, completion_tokens=3, total_tokens=13)),
+                Completed(),
+            ]
+        ]
+    )
+    runtime = _runtime(tmp_path, model)
+    messages = [
+        ChatMessage(role="system", content="system"),
+        ChatMessage(role="user", content="hi"),
+    ]
+
+    events = await _collect(runtime, messages)
+
+    assert [event.type for event in events] == [
+        "run_started",
+        "message_delta",
+        "model_usage_reported",
+        "run_finished",
+    ]
+    assert events[2].payload["total_tokens"] == 13
+    assert messages[-1].role == "assistant"
+    assert messages[-1].content == "hello"
 
 
 @pytest.mark.asyncio

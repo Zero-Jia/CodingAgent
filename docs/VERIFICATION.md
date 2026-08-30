@@ -39,28 +39,35 @@ All checks passed!
 
 ```text
 uv --cache-dir .uv-cache run mypy
-Success: no issues found in 36 source files
+Success: no issues found in 38 source files
 ```
 
 ```text
 uv --cache-dir .uv-cache run mypy src
-Success: no issues found in 36 source files
+Success: no issues found in 38 source files
 ```
 
 由于旧 `.codex-test-tmp` 目录存在权限残留，本轮改用新的项目内临时目录运行全量测试：
 
 ```text
-uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-stream-all -p no:cacheprovider
-30 passed, 1 skipped
+uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-cli-exit-final -p no:cacheprovider
+43 passed, 1 skipped
 ```
 
-在完成 P1 `真正的 Streaming Delta` 任务后，以上验证集已重新执行，结果通过。本轮新增的 runtime streaming 测试不依赖真实 DeepSeek API，也不启动 Docker。
+在完成 `Token Usage Accounting` 任务后，以上验证集已重新执行。本轮新增的 token usage 测试不依赖真实 DeepSeek API，也不启动 Docker。
 
-定向 runtime 测试：
+定向 token/runtime 测试：
 
 ```text
-uv --cache-dir .uv-cache run pytest tests/test_runtime.py --basetemp .codex-test-tmp-stream -p no:cacheprovider
-7 passed
+uv --cache-dir .uv-cache run pytest tests/test_token_usage.py tests/test_runtime.py --basetemp .codex-test-tmp-token-targeted -p no:cacheprovider
+13 passed
+```
+
+定向 CLI 退出提示测试：
+
+```text
+uv --cache-dir .uv-cache run pytest tests/test_cli.py --basetemp .codex-test-tmp-cli-exit -p no:cacheprovider
+1 passed
 ```
 
 ## 已知本地环境问题

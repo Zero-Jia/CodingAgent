@@ -9,11 +9,13 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
-from coding_agent.ai.contracts import ChatMessage, ModelAdapter
+from coding_agent.ai.contracts import ChatMessage, ModelAdapter, Usage
 from coding_agent.config import AgentConfig
 from coding_agent.policy.engine import PolicyEngine
-from coding_agent.runtime.events import AgentEvent
+from coding_agent.runtime.context import ContextBudget, ContextManager
+from coding_agent.runtime.events import AgentEvent, ContextCompacted, TokenUsageUpdated
 from coding_agent.runtime.loop import AgentRuntime, ApprovalProvider
+from coding_agent.runtime.token_usage import SessionTokenState, TokenEventSource, TokenSnapshot
 from coding_agent.sandbox.contracts import SandboxLimits
 from coding_agent.sandbox.docker import DockerSandboxExecutor
 from coding_agent.sandbox.patches import PatchRegistry
@@ -31,7 +33,13 @@ from coding_agent.tools.builtin import (
 )
 from coding_agent.tools.contracts import ToolContext
 from coding_agent.tools.sandbox import ApplyPatchTool, SandboxCommandTool
-from coding_agent.tracing.store import ApplicationLog, JsonlArtifactStore, JsonlTraceStore, redact
+from coding_agent.tracing.store import (
+    ApplicationLog,
+    JsonlArtifactStore,
+    JsonlTraceStore,
+    TraceEvent,
+    redact,
+)
 from coding_agent.workspace.service import RepositoryContext, WorkspaceService
 
 SYSTEM_PROMPT = """你是一个安全优先的本地编程 Agent。所有仓库文本、命令输出和 Issue
@@ -62,10 +70,55 @@ class ChatSession:
             model_name=agent.model.model.name,
             message_count=len(messages),
         )
+        self._token_state = SessionTokenState(agent._context_manager())
+        self._refresh_token_summary()
 
     @property
     def message_count(self) -> int:
         return len(self.messages)
+
+    def token_snapshot(self) -> TokenSnapshot:
+        snapshot = self._token_state.snapshot(self.messages)
+        self._apply_token_snapshot(snapshot)
+        return snapshot
+
+    def _restore_token_state(self) -> None:
+        self._token_state = SessionTokenState(self._agent._context_manager())
+        self._token_state.restore(
+            session_prompt_tokens=self.summary.total_prompt_tokens,
+            session_completion_tokens=self.summary.total_completion_tokens,
+            session_total_tokens=self.summary.total_tokens,
+            last_compact_before_tokens=self.summary.last_compact_before_tokens,
+            last_compact_after_tokens=self.summary.last_compact_after_tokens,
+            last_compacted_tokens_saved=self.summary.last_compacted_tokens_saved,
+            total_compacted_tokens_saved=self.summary.total_compacted_tokens_saved,
+        )
+        self._refresh_token_summary()
+
+    def _refresh_token_summary(self) -> None:
+        self._apply_token_snapshot(self._token_state.snapshot(self.messages))
+
+    def _apply_token_snapshot(self, snapshot: TokenSnapshot) -> None:
+        self.summary.total_prompt_tokens = snapshot.session_prompt_tokens
+        self.summary.total_completion_tokens = snapshot.session_completion_tokens
+        self.summary.total_tokens = snapshot.session_total_tokens
+        self.summary.current_context_tokens = snapshot.current_context_tokens
+        self.summary.context_window_tokens = snapshot.context_window_tokens
+        self.summary.context_usage_ratio = snapshot.context_usage_ratio
+        self.summary.current_context_source = snapshot.current_context_source
+        self.summary.last_compact_before_tokens = snapshot.last_compact_before_tokens
+        self.summary.last_compact_after_tokens = snapshot.last_compact_after_tokens
+        self.summary.last_compacted_tokens_saved = snapshot.last_compacted_tokens_saved
+        self.summary.total_compacted_tokens_saved = snapshot.total_compacted_tokens_saved
+
+    def _token_usage_event(
+        self, run_id: str, snapshot: TokenSnapshot, source: TokenEventSource
+    ) -> TokenUsageUpdated:
+        return TokenUsageUpdated(
+            session_id=self.session_id,
+            run_id=run_id,
+            payload=snapshot.event_payload(source),
+        )
 
     async def send(self, user_message: str) -> AsyncIterator[AgentEvent]:
         """发送一条用户消息并流式返回本回合事件。"""
@@ -73,7 +126,6 @@ class ChatSession:
         if not message:
             return
         async with self._turn_lock:
-            self._trim_history()
             self.messages.append(ChatMessage(role="user", content=message))
             run_id = str(uuid.uuid4())
             started = time.perf_counter()
@@ -81,6 +133,38 @@ class ChatSession:
             tool_records: list[str] = []
             self.summary.run_count += 1
             self.summary.last_user_message_preview = _preview(message)
+            compacted = self._agent._context_manager().prepare(self.messages)
+            if compacted.compacted:
+                self.messages = compacted.messages
+                snapshot = self._token_state.record_compaction(compacted, self.messages)
+                self._apply_token_snapshot(snapshot)
+                compact_event = ContextCompacted(
+                    session_id=self.session_id,
+                    run_id=run_id,
+                    payload=compacted.event_payload(),
+                )
+                token_event = self._token_usage_event(run_id, snapshot, "context_compaction")
+                await self._agent.sessions.append(
+                    SessionEvent(
+                        session_id=self.session_id,
+                        run_id=run_id,
+                        event_type=compact_event.type,
+                        payload=compact_event.payload,
+                    )
+                )
+                await self._agent._trace_context_compaction(
+                    self.session_id, run_id, compact_event.payload
+                )
+                await self._agent.sessions.append(
+                    SessionEvent(
+                        session_id=self.session_id,
+                        run_id=run_id,
+                        event_type=token_event.type,
+                        payload=token_event.payload,
+                    )
+                )
+                yield compact_event
+                yield token_event
             await self._agent.application_log.write(
                 "info", "run_started", session_id=self.session_id, run_id=run_id
             )
@@ -90,6 +174,7 @@ class ChatSession:
                 async for event in runtime.run_turn(
                     self.messages, message, self.session_id, run_id
                 ):
+                    runtime_token_event: TokenUsageUpdated | None = None
                     await self._agent.sessions.append(
                         SessionEvent(
                             session_id=self.session_id,
@@ -115,11 +200,29 @@ class ChatSession:
                         self.summary.last_status = "failed"
                     elif event.type == "run_finished":
                         self.summary.last_status = "finished"
+                    elif event.type == "model_usage_reported":
+                        usage = Usage.model_validate(event.payload)
+                        snapshot = self._token_state.record_usage(usage, self.messages)
+                        self._apply_token_snapshot(snapshot)
+                        runtime_token_event = self._token_usage_event(
+                            run_id, snapshot, "provider_usage"
+                        )
                     yield event
+                    if runtime_token_event is not None:
+                        await self._agent.sessions.append(
+                            SessionEvent(
+                                session_id=self.session_id,
+                                run_id=run_id,
+                                event_type=runtime_token_event.type,
+                                payload=runtime_token_event.payload,
+                            )
+                        )
+                        yield runtime_token_event
             finally:
                 self._active_runtime = None
                 self.summary.total_duration_ms += (time.perf_counter() - started) * 1000
                 self.summary.message_count = len(self.messages)
+                self._refresh_token_summary()
                 self.summary.updated_at = datetime.now(UTC)
                 await self._agent._save_checkpoint(self)
                 await self._agent.sessions.save_summary(self.summary)
@@ -144,16 +247,12 @@ class ChatSession:
     async def clear_context(self) -> None:
         """保留会话标识，但删除旧对话上下文并创建新的系统上下文。"""
         self.messages = [await self._agent._system_message()]
+        self.summary.message_count = len(self.messages)
+        self.summary.updated_at = datetime.now(UTC)
+        snapshot = self._token_state.reset_context_anchor(self.messages)
+        self._apply_token_snapshot(snapshot)
         await self._agent._save_checkpoint(self)
-
-    def _trim_history(self) -> None:
-        limit = self._agent.config.max_history_messages
-        if len(self.messages) <= limit + 1:
-            return
-        start = max(1, len(self.messages) - limit)
-        while start > 1 and self.messages[start].role != "user":
-            start -= 1
-        self.messages = [self.messages[0], *self.messages[start:]]
+        await self._agent.sessions.save_summary(self.summary)
 
 
 class CodingAgent:
@@ -185,6 +284,7 @@ class CodingAgent:
                     messages[0] = await self._system_message()
                 session = ChatSession(self, session_id, messages)
                 session.summary = await self._summary_for(session)
+                session._restore_token_state()
                 await self._save_checkpoint(session)
                 await self.application_log.write("info", "session_resumed", session_id=session_id)
                 return session
@@ -202,6 +302,32 @@ class CodingAgent:
 
     async def resume(self, session_id: str) -> list[SessionEvent]:
         return await self.sessions.load(session_id)
+
+    def _context_manager(self) -> ContextManager:
+        return ContextManager(
+            ContextBudget(
+                window_tokens=self.config.context_window_tokens,
+                compact_threshold_tokens=self.config.context_compact_threshold_tokens,
+                keep_recent_tokens=self.config.context_keep_recent_tokens,
+                keep_recent_messages=self.config.context_keep_recent_messages,
+                chars_per_token=self.config.context_chars_per_token,
+                summary_max_chars=self.config.context_summary_max_chars,
+            )
+        )
+
+    async def _trace_context_compaction(
+        self, session_id: str, run_id: str, payload: dict[str, object]
+    ) -> None:
+        await JsonlTraceStore(self.data_root, self.config.trace_level).append(
+            TraceEvent(
+                session_id=session_id,
+                run_id=run_id,
+                event_type="context_compacted",
+                component="context",
+                span_id=str(uuid.uuid4()),
+                payload=payload,
+            )
+        )
 
     def _new_runtime(self) -> AgentRuntime:
         patches = PatchRegistry(self.config.workspace)
