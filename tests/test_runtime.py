@@ -133,8 +133,14 @@ async def test_runtime_returns_plain_text_answer(tmp_path: Path) -> None:
 
     events = await _collect(runtime, messages)
 
-    assert [event.type for event in events] == ["run_started", "message_delta", "run_finished"]
-    assert events[1].payload["text"] == "hello world"
+    assert [event.type for event in events] == [
+        "run_started",
+        "message_delta",
+        "message_delta",
+        "run_finished",
+    ]
+    assert events[1].payload["text"] == "hello"
+    assert events[2].payload["text"] == " world"
     assert messages[-1].role == "assistant"
     assert messages[-1].content == "hello world"
 
@@ -213,6 +219,71 @@ async def test_runtime_returns_policy_denied_tool_result_to_model(tmp_path: Path
     assert not shell.called
     assert len(model.requests) == 2
     assert "policy_denied" in model.requests[1].messages[-1].content
+
+
+@pytest.mark.asyncio
+async def test_runtime_streams_text_before_tool_execution(tmp_path: Path) -> None:
+    (tmp_path / "sample.txt").write_text("sample content\n", encoding="utf-8")
+    model = FakeModelAdapter(
+        [
+            [
+                TextDelta(text="I'll inspect that. "),
+                ToolCallCompleted(
+                    call=ToolCall(
+                        id="call-1", name="read", arguments_json='{"path": "sample.txt"}'
+                    )
+                ),
+                Completed(),
+            ],
+            [TextDelta(text="Done."), Completed()],
+        ]
+    )
+    runtime = _runtime(tmp_path, model)
+    messages = [
+        ChatMessage(role="system", content="system"),
+        ChatMessage(role="user", content="read file"),
+    ]
+
+    events = await _collect(runtime, messages)
+
+    assert [event.type for event in events] == [
+        "run_started",
+        "message_delta",
+        "tool_started",
+        "tool_finished",
+        "message_delta",
+        "run_finished",
+    ]
+    assert events[1].payload["text"] == "I'll inspect that. "
+    assert events[4].payload["text"] == "Done."
+    assert messages[2].role == "assistant"
+    assert messages[2].content == "I'll inspect that. "
+    assert messages[2].tool_calls[0].name == "read"
+    assert messages[-1].role == "assistant"
+    assert messages[-1].content == "Done."
+
+
+@pytest.mark.asyncio
+async def test_runtime_does_not_retry_after_partial_text_output(tmp_path: Path) -> None:
+    model = FakeModelAdapter(
+        [
+            [TextDelta(text="partial"), ModelError(message="temporary", retryable=True)],
+            [TextDelta(text="retried"), Completed()],
+        ]
+    )
+    runtime = _runtime(tmp_path, model)
+    messages = [
+        ChatMessage(role="system", content="system"),
+        ChatMessage(role="user", content="hello"),
+    ]
+
+    events = await _collect(runtime, messages)
+
+    assert [event.type for event in events] == ["run_started", "message_delta", "run_failed"]
+    assert events[1].payload["text"] == "partial"
+    assert events[-1].payload["reason"] == "model retry requested after partial text output"
+    assert len(model.requests) == 1
+    assert messages[-1].role == "user"
 
 
 @pytest.mark.asyncio

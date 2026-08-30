@@ -63,7 +63,6 @@
 - Hooks。
 - 真实 memory 检索。
 - 上下文压缩。
-- 真正的 assistant 增量 streaming。
 - 多 agent 编排。
 - Worktree 隔离。
 - coverage、pre-commit、release workflow、安全扫描和完整 CI/CD 发布流水线。
@@ -72,22 +71,17 @@
 
 本轮完成：
 
-- 完成 P1 Runtime 成熟化中的 `Model Gateway` 任务。
-- 新增 `coding_agent.ai.gateway`，通过 provider registry 创建模型 adapter。
-- 当前 registry 只注册 `deepseek`，保持现有 DeepSeek 默认行为不变。
-- `AgentConfig` 新增 `model_provider`，支持 `CODING_AGENT_MODEL_PROVIDER` 和 `CODING_AGENT_MODEL`。
-- CLI 新增 `--provider` 参数，并改为通过 gateway 创建 adapter，不再直接构造 `DeepSeekAdapter`。
-- 新增 provider selection 测试，覆盖 DeepSeek、未知 provider、缺少 key、环境变量和显式覆盖。
-- 更新 README、架构、路线图、任务清单和验证说明。
+- 完成 P1 Runtime 成熟化中的 `真正的 Streaming Delta` 任务。
+- Runtime 收到模型 `TextDelta` 后立即发出 `message_delta` 事件，而不是等最终回答结束后一次性输出。
+- Runtime 仍累积完整 assistant 文本，并将完整内容写入模型消息历史，保证后续 checkpoint 可以保存完整 assistant 内容。
+- 增加部分文本已经输出后遇到 retryable model error 的保守处理：不再静默重试，避免用户可见输出和模型历史发生错位。
+- 增加 runtime 测试，覆盖纯文本多 chunk、工具调用前文本增量输出、部分文本输出后 retry 边界。
+- 更新架构、任务清单、交接和验证说明。
 
 本轮修改文件：
 
-- `src/coding_agent/ai/gateway.py`
-- `src/coding_agent/ai/__init__.py`
-- `src/coding_agent/config.py`
-- `src/coding_agent/cli/app.py`
-- `tests/test_model_gateway.py`
-- `README.md`
+- `src/coding_agent/runtime/loop.py`
+- `tests/test_runtime.py`
 - `docs/ARCHITECTURE.md`
 - `docs/ROADMAP.md`
 - `docs/SESSION_HANDOFF.md`
@@ -96,34 +90,36 @@
 
 最近一次验证结果：
 
+- `uv --cache-dir .uv-cache run pytest tests/test_runtime.py --basetemp .codex-test-tmp-stream -p no:cacheprovider`：7 passed。
 - `uv --cache-dir .uv-cache run ruff check`：通过。
 - `uv --cache-dir .uv-cache run mypy`：通过。
 - `uv --cache-dir .uv-cache run mypy src`：通过。
-- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider`：28 passed，1 skipped。
+- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-stream-all -p no:cacheprovider`：30 passed，1 skipped。
 
 注意事项：
 
 - 普通 `uv run pytest` 在 Codex 沙箱账户下可能失败，因为它会尝试写入 `C:\Users\HP\AppData\Local\Temp\pytest-of-HP`。
 - `git status` 可能因为 Git dubious ownership 失败，原因是仓库属于用户 Windows 账户，而 Codex 使用沙箱账户运行。除非用户明确要求，不要修改全局 Git 配置。
 - GitHub Actions workflow 已在仓库中新增，但本轮只完成了本地验证，没有观察远端 Actions 实际运行结果。
+- 本轮第一次使用 `--basetemp .codex-test-tmp` 运行 runtime 测试时，被旧临时目录权限问题拦截；改用新的 `.codex-test-tmp-stream` 后通过。
 
 ## 下一轮建议
 
 建议下一轮任务：
 
-从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若继续按当前 backlog 推进，建议做 P1 的 `真正的 Streaming Delta`；若优先补工程化，也可以先增加 coverage 或 pre-commit，但需要先把它们加入任务清单。
+从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若继续按当前 backlog 推进，建议做 P1 的 `Context Manager`；若优先补工程化，也可以先增加 coverage 或 pre-commit，但需要先把它们加入任务清单。
 
 建议 prompt：
 
 ```text
-本轮只做真正的 Streaming Delta，不重构无关模块。请让 assistant 文本在模型返回时增量输出，同时保证 session checkpoint 仍保存完整 assistant 内容。增加确定性测试覆盖流式 chunk，完成后运行 ruff、mypy、pytest，并更新 docs/SESSION_HANDOFF.md 和 docs/VERIFICATION.md。
+本轮只做 Context Manager，不重构无关模块。请增加负责 token budget 和自动 compact 的上下文管理器，让长历史通过摘要保留而不是简单截断。增加确定性测试覆盖 compact 边界，完成后运行 ruff、mypy、pytest，并更新 docs/SESSION_HANDOFF.md 和 docs/VERIFICATION.md。
 ```
 
 验收标准：
 
-- CLI 可以渲染 assistant 文本增量输出。
-- 最终 session checkpoint 保存完整 assistant 内容。
-- 流式 chunk 有测试覆盖。
+- 长历史通过摘要保留，而不是简单截断。
+- 最近工具结果和重要文件得到保留。
+- compact 边界有测试覆盖。
 - 现有安全边界不变。
 - `uv --cache-dir .uv-cache run ruff check`、`uv --cache-dir .uv-cache run mypy`、`uv --cache-dir .uv-cache run mypy src` 和 `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider` 通过。
 

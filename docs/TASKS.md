@@ -93,7 +93,7 @@
 
 ### 6. 真正的 Streaming Delta
 
-状态：未开始。
+状态：已完成。
 
 任务：
 
@@ -104,6 +104,12 @@
 - CLI 可以渲染增量输出。
 - 最终 session checkpoint 仍保存完整 assistant 内容。
 - 测试覆盖流式 chunk。
+
+完成记录：
+
+- Runtime 收到模型 `TextDelta` 后立即发出 `message_delta` 事件。
+- Assistant 完整文本仍在 runtime 内累积，并写入模型消息历史和后续 checkpoint。
+- 已覆盖纯文本多 chunk、工具调用前文本增量和部分文本输出后 retry 边界。
 
 ### 7. Context Manager
 

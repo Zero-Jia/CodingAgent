@@ -68,13 +68,13 @@
 当前状态：
 
 - 支持 run start、message output、reasoning output、tool start/update/finish、approval request/resolve、finish、failure 和 cancellation。
+- Assistant 文本会按模型 `TextDelta` 增量发出 `message_delta`，同时完整内容仍保存到模型消息历史。
 - 支持最大 turn 数和最大工具调用数限制。
 - 通过 `TraceStore` 写入 trace 事件。
 - 在存在 artifact writer 时保存完整工具输出。
 
 已知限制：
 
-- `message_delta` 当前是在无工具调用的最终回答结束后一次性发出，还不是真正的模型文本增量流。
 - 工具调用目前串行执行。
 - 还没有独立 context manager 和自动 compact。
 

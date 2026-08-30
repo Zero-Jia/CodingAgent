@@ -22,7 +22,7 @@ uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovid
 
 ## 最近一次验证结果
 
-日期：2026-08-29
+日期：2026-08-30
 
 环境：
 
@@ -47,12 +47,21 @@ uv --cache-dir .uv-cache run mypy src
 Success: no issues found in 36 source files
 ```
 
+由于旧 `.codex-test-tmp` 目录存在权限残留，本轮改用新的项目内临时目录运行全量测试：
+
 ```text
-uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider
-28 passed, 1 skipped
+uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-stream-all -p no:cacheprovider
+30 passed, 1 skipped
 ```
 
-在完成 P1 `Model Gateway` 任务后，以上验证集已重新执行，结果通过。本轮新增的 provider selection 测试不依赖真实 DeepSeek API，也不启动 Docker。
+在完成 P1 `真正的 Streaming Delta` 任务后，以上验证集已重新执行，结果通过。本轮新增的 runtime streaming 测试不依赖真实 DeepSeek API，也不启动 Docker。
+
+定向 runtime 测试：
+
+```text
+uv --cache-dir .uv-cache run pytest tests/test_runtime.py --basetemp .codex-test-tmp-stream -p no:cacheprovider
+7 passed
+```
 
 ## 已知本地环境问题
 

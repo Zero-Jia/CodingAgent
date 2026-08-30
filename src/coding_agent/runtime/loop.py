@@ -120,6 +120,12 @@ class AgentRuntime:
                     return
                 if isinstance(event, TextDelta):
                     assistant_text.append(event.text)
+                    if event.text:
+                        yield MessageDelta(
+                            session_id=session_id,
+                            run_id=run_id,
+                            payload={"text": event.text},
+                        )
                 elif event.type == "reasoning_delta":
                     yield ReasoningDelta(
                         session_id=session_id, run_id=run_id, payload={"text": event.text}
@@ -141,6 +147,13 @@ class AgentRuntime:
                         )
                         return
             if retryable_error:
+                if assistant_text:
+                    yield RunFailed(
+                        session_id=session_id,
+                        run_id=run_id,
+                        payload={"reason": "model retry requested after partial text output"},
+                    )
+                    return
                 if turn < self.max_turns:
                     continue
                 yield RunFailed(
@@ -158,12 +171,6 @@ class AgentRuntime:
                     )
                 )
             if not completed_calls:
-                if assistant_text:
-                    yield MessageDelta(
-                        session_id=session_id,
-                        run_id=run_id,
-                        payload={"text": "".join(assistant_text)},
-                    )
                 yield RunFinished(session_id=session_id, run_id=run_id, payload={"turns": turn})
                 await self._trace(session_id, run_id, "run_finished", "runtime", {"turns": turn})
                 return

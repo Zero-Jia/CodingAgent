@@ -12,6 +12,7 @@
 - DeepSeek 模型适配器。
 - 供应商无关的模型和工具契约。
 - 事件驱动 runtime。
+- 真正的 assistant 文本增量 streaming，runtime 会逐个转发模型 `TextDelta`。
 - `read`、`search`、`git_diff` 只读工具。
 - Docker 无网络沙箱命令工具。
 - 单独的 `verify` 工具，沙箱变更会被丢弃。
@@ -70,7 +71,7 @@
 - 已完成：增加 model gateway 和 provider registry。
 - 已完成：保持现有 DeepSeek 行为不变，同时迁移到 gateway 后面。
 - 增加 OpenAI-compatible adapter。
-- 实现真正的增量 streaming 输出。
+- 已完成：实现真正的增量 streaming 输出。
 - 增加带 token budget 的 context manager。
 - 增加自动 compact。
 - 增加工具输出摘要策略。
