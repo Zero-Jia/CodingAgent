@@ -56,7 +56,7 @@ class PolicyEngine:
             return self._authorization("patch application", self.allow_write)
         if tool_name == "shell":
             return PolicyDecision("deny", "host shell execution is disabled; use sandbox_shell")
-        if tool_name in {"search", "git_diff"}:
+        if tool_name in {"search", "git_diff", "submit_plan"}:
             return PolicyDecision("allow", "read-only workspace operation")
         return PolicyDecision("deny", f"unknown tool: {tool_name}")
 

@@ -22,7 +22,7 @@ uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovid
 
 ## 最近一次验证结果
 
-日期：2026-08-30
+日期：2026-08-31
 
 环境：
 
@@ -39,36 +39,61 @@ All checks passed!
 
 ```text
 uv --cache-dir .uv-cache run mypy
-Success: no issues found in 38 source files
+Success: no issues found in 40 source files
 ```
 
 ```text
 uv --cache-dir .uv-cache run mypy src
-Success: no issues found in 38 source files
+Success: no issues found in 40 source files
 ```
 
-由于旧 `.codex-test-tmp` 目录存在权限残留，本轮改用新的项目内临时目录运行全量测试：
+定向 sandbox 安全过滤测试：
 
 ```text
-uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-cli-exit-final -p no:cacheprovider
-43 passed, 1 skipped
+uv --cache-dir .uv-cache run pytest tests/test_sandbox.py --basetemp .codex-test-tmp-security -p no:cacheprovider
+14 passed, 1 skipped
 ```
 
-在完成 `Token Usage Accounting` 任务后，以上验证集已重新执行。本轮新增的 token usage 测试不依赖真实 DeepSeek API，也不启动 Docker。
-
-定向 token/runtime 测试：
+定向 Plan Mode 测试：
 
 ```text
-uv --cache-dir .uv-cache run pytest tests/test_token_usage.py tests/test_runtime.py --basetemp .codex-test-tmp-token-targeted -p no:cacheprovider
-13 passed
+uv --cache-dir .uv-cache run pytest tests/test_plan_mode.py --basetemp .codex-test-tmp-plan-recovery-3 -p no:cacheprovider
+10 passed
 ```
 
-定向 CLI 退出提示测试：
+当前仓库 snapshot smoke test：
 
 ```text
-uv --cache-dir .uv-cache run pytest tests/test_cli.py --basetemp .codex-test-tmp-cli-exit -p no:cacheprovider
-1 passed
+uv --cache-dir .uv-cache run python -c "<SnapshotService check>"
+True
+True
 ```
+
+实际 Docker 沙箱 smoke test：
+
+```text
+uv --cache-dir .uv-cache run python -c "<DockerSandboxExecutor check>"
+success
+0
+......                                                                   [100%]
+6 passed in 0.56s
+```
+
+此前定向 Plan Mode/runtime 测试：
+
+```text
+uv --cache-dir .uv-cache run pytest tests/test_plan_mode.py tests/test_runtime.py --basetemp .codex-test-tmp-plan -p no:cacheprovider
+14 passed
+```
+
+本轮改用新的项目内临时目录运行全量测试：
+
+```text
+uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-plan-recovery-final2 -p no:cacheprovider
+56 passed, 1 skipped
+```
+
+在完成 Plan Mode 失败恢复状态机后，以上验证集已重新执行。本轮新增自动化测试不依赖真实 DeepSeek API，也不启动 Docker；此前额外 Docker smoke test 已确认沙箱 `/workspace` 中包含 `token_usage.py`，并可运行 `tests/test_plan_mode.py`。
 
 ## 已知本地环境问题
 

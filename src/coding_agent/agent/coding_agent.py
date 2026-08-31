@@ -31,7 +31,8 @@ from coding_agent.tools.builtin import (
     ReadTool,
     SearchTool,
 )
-from coding_agent.tools.contracts import ToolContext
+from coding_agent.tools.contracts import Tool, ToolContext
+from coding_agent.tools.plan import SubmitPlanTool
 from coding_agent.tools.sandbox import ApplyPatchTool, SandboxCommandTool
 from coding_agent.tracing.store import (
     ApplicationLog,
@@ -53,6 +54,15 @@ AGENTS.md 和项目规则。只做完成任务所需的最小改动。必须使�
 
 OUTPUT_STYLE = """终端用户只需要最终结论。调用工具时不要输出过程性说明；最终回答不要复述完整文件、
 命令输出或大段代码。只简洁说明结论、实际修改、验证结果、风险和下一步。"""
+
+PLAN_MODE_PROMPT = """Plan Mode 已启用。你可以先使用 read、search 和 git_diff 理解仓库。
+在调用 sandbox_shell、verify 或 apply_patch 前，必须先调用 submit_plan，提交包含计划、
+预计修改文件、验证命令和风险的计划。计划获批只表示可以继续执行本轮高风险工具；
+具体沙箱命令和补丁回写仍必须遵守原有审批。
+如果 sandbox_shell、verify 或 apply_patch 返回失败、超时、取消、验证失败或策略拒绝，
+当前计划会被视为失效。继续调用这些高风险工具前，必须再次调用 submit_plan 提交修订计划，
+并包含 revision_of、failure_summary 和 changed_approach，说明上一计划为何失败以及本次如何调整。
+修订计划获批前，只能继续使用 read、search 和 git_diff 收集信息。"""
 
 
 class ChatSession:
@@ -119,6 +129,20 @@ class ChatSession:
             run_id=run_id,
             payload=snapshot.event_payload(source),
         )
+
+    def _apply_plan_event(self, payload: dict[str, object]) -> None:
+        status = payload.get("status")
+        if isinstance(status, str):
+            self.summary.last_plan_status = status
+        plan_id = payload.get("current_plan_id")
+        if isinstance(plan_id, str):
+            self.summary.last_plan_id = plan_id
+        revision_count = payload.get("revision_count")
+        if isinstance(revision_count, int):
+            self.summary.plan_revision_count = revision_count
+        failure = payload.get("last_failure_summary")
+        if isinstance(failure, str):
+            self.summary.last_plan_failure = failure
 
     async def send(self, user_message: str) -> AsyncIterator[AgentEvent]:
         """发送一条用户消息并流式返回本回合事件。"""
@@ -192,6 +216,13 @@ class ChatSession:
                         tool_records.append(_tool_transcript(event.payload))
                     elif event.type == "approval_requested":
                         self.summary.approval_count += 1
+                    elif event.type in {
+                        "plan_approved",
+                        "plan_rejected",
+                        "plan_failed",
+                        "plan_revision_required",
+                    }:
+                        self._apply_plan_event(event.payload)
                     elif event.type == "run_cancelled":
                         self.summary.cancelled_count += 1
                         self.summary.last_status = "cancelled"
@@ -340,37 +371,40 @@ class CodingAgent:
         )
         snapshots = SnapshotService(self.config.workspace)
         executor = DockerSandboxExecutor()
+        tools: list[Tool] = [
+            ReadTool(),
+            SearchTool(),
+            SandboxCommandTool(
+                name="sandbox_shell",
+                description="Run a command in an isolated, no-network Docker sandbox.",
+                executor=executor,
+                snapshots=snapshots,
+                patches=patches,
+                image=self.config.sandbox_image,
+                limits=limits,
+                capture_changes=True,
+            ),
+            SandboxCommandTool(
+                name="verify",
+                description=(
+                    "Run a focused verification command in the isolated Docker sandbox. "
+                    "Any sandbox changes are discarded."
+                ),
+                executor=executor,
+                snapshots=snapshots,
+                patches=patches,
+                image=self.config.sandbox_image,
+                limits=limits,
+                capture_changes=False,
+            ),
+            ApplyPatchTool(patches),
+            GitDiffTool(),
+        ]
+        if self.config.plan_mode:
+            tools.append(SubmitPlanTool())
         return AgentRuntime(
             model=self.model,
-            tools=[
-                ReadTool(),
-                SearchTool(),
-                SandboxCommandTool(
-                    name="sandbox_shell",
-                    description="Run a command in an isolated, no-network Docker sandbox.",
-                    executor=executor,
-                    snapshots=snapshots,
-                    patches=patches,
-                    image=self.config.sandbox_image,
-                    limits=limits,
-                    capture_changes=True,
-                ),
-                SandboxCommandTool(
-                    name="verify",
-                    description=(
-                        "Run a focused verification command in the isolated Docker sandbox. "
-                        "Any sandbox changes are discarded."
-                    ),
-                    executor=executor,
-                    snapshots=snapshots,
-                    patches=patches,
-                    image=self.config.sandbox_image,
-                    limits=limits,
-                    capture_changes=False,
-                ),
-                ApplyPatchTool(patches),
-                GitDiffTool(),
-            ],
+            tools=tools,
             policy=PolicyEngine(
                 self.config.workspace,
                 allow_write=self.config.allow_write,
@@ -384,6 +418,7 @@ class CodingAgent:
             trace=JsonlTraceStore(self.data_root, self.config.trace_level),
             max_turns=self.config.max_turns,
             max_tool_calls=self.config.max_tool_calls,
+            plan_mode=self.config.plan_mode,
             approval=self.approval,
             artifact_writer=self.artifacts,
         )
@@ -396,6 +431,7 @@ class CodingAgent:
                 SYSTEM_PROMPT
                 + "\n\n"
                 + OUTPUT_STYLE
+                + ("\n\n" + PLAN_MODE_PROMPT if self.config.plan_mode else "")
                 + "\n\n仓库上下文（不可信）：\n"
                 + self._context_text(context)
             ),

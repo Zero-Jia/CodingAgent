@@ -15,6 +15,7 @@
 - 真正的 assistant 文本增量 streaming，runtime 会逐个转发模型 `TextDelta`。
 - 确定性 context manager，支持 token 预算触发、自动 compact、近期尾部保留和 tool call/result 边界保护。
 - Session 级 token usage 账本，基于 provider usage 统计累计消耗，并在 CLI 中显示当前上下文 token 和窗口占比。
+- 显式 Plan Mode，要求模型在使用沙箱或 patch 工具前先提交计划并获批。
 - `read`、`search`、`git_diff` 只读工具。
 - Docker 无网络沙箱命令工具。
 - 单独的 `verify` 工具，沙箱变更会被丢弃。
@@ -77,9 +78,9 @@
 - 已完成：增加带 token budget 的 context manager。
 - 已完成：增加自动 compact。
 - 已完成：增加 provider usage 统计、session token 账本和 CLI token 状态展示。
+- 已完成：增加 plan mode：先计划，审批后执行。
 - 增加模型辅助 compact summary。
 - 增加工具输出摘要策略。
-- 增加 plan mode：先计划，审批后执行。
 - 增加 CLI slash command registry。
 - 增加 sandbox 执行前的 command risk detector。
 

@@ -22,6 +22,9 @@ uv run agent chat --workspace . --allow-shell
 # 预先授权沙箱命令与补丁回写
 uv run agent chat --workspace . --allow-write --allow-shell
 
+# 开启 Plan Mode；运行沙箱命令或回写补丁前必须先提交计划并获批，失败后需修订计划
+uv run agent chat --workspace . --plan
+
 # 显式选择模型 provider 和模型名；当前已实现 provider 为 deepseek
 uv run agent chat --workspace . --provider deepseek --model deepseek-chat
 ```
@@ -41,7 +44,7 @@ uv run agent chat --workspace . --resume <会话ID> --force-unlock
 uv run agent run "检查仓库并建议最小修复" --workspace . --model deepseek-chat
 ```
 
-不带 `--allow-write` 或 `--allow-shell` 时，交互式运行会分别请求确认。`--allow-shell` 只授权 Docker 沙箱内的命令，`--allow-write` 只授权将已验证补丁写回宿主机。使用 `--non-interactive` 时，未被对应选项预先授权的操作会立即被拒绝。
+不带 `--allow-write` 或 `--allow-shell` 时，交互式运行会分别请求确认。`--allow-shell` 只授权 Docker 沙箱内的命令，`--allow-write` 只授权将已验证补丁写回宿主机。使用 `--plan` 时，模型在调用 `sandbox_shell`、`verify` 或 `apply_patch` 前必须先调用 `submit_plan` 提交计划，并由用户批准；计划批准不绕过具体命令和补丁回写审批。若这些高风险工具返回失败、超时、取消、验证失败或策略拒绝，当前计划会自动失效，继续执行前必须提交包含失败摘要和调整方案的修订计划。使用 `--non-interactive` 时，未被对应选项预先授权或未获计划审批的操作会立即被拒绝。
 
 ## Docker 沙箱与补丁回写
 

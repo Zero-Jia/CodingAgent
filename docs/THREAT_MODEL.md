@@ -54,7 +54,8 @@
 
 当前控制：
 
-- `WorkspacePathPolicy` 拒绝 `.env*`、密钥后缀、凭据命名、`.ssh`、`.git`、`.coding-agent`、缓存和虚拟环境目录。
+- `WorkspacePathPolicy` 拒绝 `.env*`、密钥后缀、精确凭据文件名、`.ssh`、`.git`、`.coding-agent`、缓存和虚拟环境目录。
+- 敏感文件名规则避免使用宽泛的 `token`、`secret` 或 `credential` 子串匹配，防止 `token_usage.py` 这类普通源码被排除出沙箱快照。
 - `read`、`search`、snapshot 和 patch 回写共用同一套路径策略。
 - trace、artifact、transcript 和 checkpoint 写入前会做基础脱敏。
 
@@ -62,6 +63,7 @@
 
 - 脱敏规则是模式匹配，不等于完整 DLP。
 - 已经进入普通源码文件的秘密仍可能被读取；后续需要 secret scanner。
+- 未来新增敏感命名规则时必须同时覆盖误伤回归测试，确保沙箱验证看到的源码集与宿主工作区一致。
 
 ### 宿主机写入风险
 

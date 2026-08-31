@@ -158,7 +158,7 @@
 
 ### 9. Plan Mode
 
-状态：未开始。
+状态：已完成。
 
 任务：
 
@@ -169,6 +169,18 @@
 - 使用 sandbox 或 patch 工具前需要计划审批。
 - 非交互模式默认拒绝未审批执行。
 - 测试覆盖批准和拒绝路径。
+
+完成记录：
+
+- 新增 `submit_plan` 工具，Plan Mode 开启时由 runtime 暴露给模型。
+- 新增 `plan_mode` 配置和 CLI `--plan` 开关。
+- Runtime 在 `sandbox_shell`、`verify` 和 `apply_patch` 前强制检查本轮是否已有获批计划。
+- 计划审批不绕过原有 `--allow-shell`、`--allow-write` 和具体工具审批。
+- 非交互模式下 `submit_plan` 默认拒绝，不能靠预授权绕过计划门禁。
+- 新增 `tests/test_plan_mode.py` 覆盖未计划拦截、计划批准、计划拒绝、非交互拒绝和 CLI 状态展示。
+- 新增 Plan Mode 恢复状态机：高风险工具失败后当前计划自动失效，继续执行前必须提交包含失败摘要和调整方案的修订计划。
+- 新增 plan 事件和 session summary 字段，记录计划状态、计划 ID、修订次数和最近失败。
+- `tests/test_plan_mode.py` 增加失败后阻塞、修订计划放行、缺少失败上下文拒绝等回归测试。
 
 ## P2：企业平台能力
 

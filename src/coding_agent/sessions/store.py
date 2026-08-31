@@ -60,6 +60,10 @@ class SessionSummary(BaseModel):
     last_compact_after_tokens: int = 0
     last_compacted_tokens_saved: int = 0
     total_compacted_tokens_saved: int = 0
+    last_plan_status: str = ""
+    last_plan_id: str = ""
+    plan_revision_count: int = 0
+    last_plan_failure: str = ""
 
 
 class SessionStore(Protocol):

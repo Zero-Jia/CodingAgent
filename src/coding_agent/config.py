@@ -16,6 +16,7 @@ class AgentConfig(BaseModel):
     deepseek_api_key: SecretStr | None = Field(default=None, exclude=True)
     allow_write: bool = False
     allow_shell: bool = False
+    plan_mode: bool = False
     non_interactive: bool = False
     sandbox_image: str = "coding-agent-sandbox:python-3.12"
     sandbox_timeout_seconds: int = 60

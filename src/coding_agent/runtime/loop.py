@@ -26,6 +26,11 @@ from coding_agent.runtime.events import (
     ApprovalResolved,
     MessageDelta,
     ModelUsageReported,
+    PlanApproved,
+    PlanFailed,
+    PlanRejected,
+    PlanRevisionRequired,
+    PlanSubmitted,
     ReasoningDelta,
     RunCancelled,
     RunFailed,
@@ -35,6 +40,7 @@ from coding_agent.runtime.events import (
     ToolStarted,
     ToolUpdated,
 )
+from coding_agent.runtime.plan import PlanStateManager
 from coding_agent.tools.contracts import Tool, ToolContext, ToolResult, ToolUpdate
 from coding_agent.tracing.store import TraceEvent, TraceStore, output_summary
 
@@ -65,6 +71,7 @@ class AgentRuntime:
         trace: TraceStore,
         max_turns: int,
         max_tool_calls: int,
+        plan_mode: bool = False,
         approval: ApprovalProvider | None = None,
         artifact_writer: ArtifactWriter | None = None,
     ) -> None:
@@ -75,6 +82,8 @@ class AgentRuntime:
         self.trace = trace
         self.max_turns = max_turns
         self.max_tool_calls = max_tool_calls
+        self.plan_mode = plan_mode
+        self.plan = PlanStateManager(plan_mode)
         self.approval = approval or DenyApproval()
         self.artifact_writer = artifact_writer
         self.cancel_signal = asyncio.Event()
@@ -244,6 +253,49 @@ class AgentRuntime:
                 payload={"tool": call.name, "result": _public_result(unknown_result, None)},
             )
             return
+        if self.plan_mode and call.name == "submit_plan":
+            plan_error = self.plan.submission_error(params)
+            if plan_error is not None:
+                invalid_plan_result = ToolResult(
+                    status="validation_failed", summary=plan_error
+                )
+                self._model_tool_results[call.id] = invalid_plan_result.model_dump()
+                yield ToolFinished(
+                    session_id=session_id,
+                    run_id=run_id,
+                    payload={
+                        "tool": call.name,
+                        "result": _public_result(invalid_plan_result, None),
+                    },
+                )
+                return
+        plan_decision = self.plan.gate(call.name)
+        if not plan_decision.allowed:
+            denied_result = ToolResult(status="policy_denied", summary=plan_decision.reason)
+            self._model_tool_results[call.id] = denied_result.model_dump()
+            await self._trace(
+                session_id,
+                run_id,
+                "plan_gate_denied",
+                "policy",
+                {"tool": call.name, "reason": denied_result.summary},
+            )
+            if self.plan.status == "failed":
+                yield PlanRevisionRequired(
+                    session_id=session_id,
+                    run_id=run_id,
+                    payload={
+                        **self.plan.snapshot(),
+                        "tool": call.name,
+                        "reason": denied_result.summary,
+                    },
+                )
+            yield ToolFinished(
+                session_id=session_id,
+                run_id=run_id,
+                payload={"tool": call.name, "result": _public_result(denied_result, None)},
+            )
+            return
         decision = self.policy.tool_decision(call.name, params)
         await self._trace(
             session_id,
@@ -253,7 +305,45 @@ class AgentRuntime:
             {"tool": call.name, "decision": decision.decision, "reason": decision.reason},
         )
         allowed = decision.decision == "allow"
-        if decision.decision == "require_approval":
+        denied_reason = decision.reason
+        if self.plan_mode and call.name == "submit_plan":
+            plan_reason = "plan mode requires approval before execution"
+            plan_details = self.plan.approval_details(params)
+            yield PlanSubmitted(
+                session_id=session_id,
+                run_id=run_id,
+                payload=plan_details,
+            )
+            yield ApprovalRequested(
+                session_id=session_id,
+                run_id=run_id,
+                payload={
+                    "tool": call.name,
+                    "reason": plan_reason,
+                    "details": plan_details,
+                },
+            )
+            allowed = await self.approval.request(call.name, plan_reason, plan_details)
+            yield ApprovalResolved(
+                session_id=session_id,
+                run_id=run_id,
+                payload={"tool": call.name, "approved": allowed},
+            )
+            if allowed:
+                plan_payload = self.plan.approve(params)
+                yield PlanApproved(
+                    session_id=session_id,
+                    run_id=run_id,
+                    payload=plan_payload,
+                )
+            else:
+                yield PlanRejected(
+                    session_id=session_id,
+                    run_id=run_id,
+                    payload=self.plan.reject(),
+                )
+                denied_reason = "plan was rejected; sandbox and patch tools remain blocked"
+        elif decision.decision == "require_approval":
             approval_params = params
             approval_details = getattr(tool, "approval_details", None)
             if callable(approval_details):
@@ -272,8 +362,22 @@ class AgentRuntime:
                 payload={"tool": call.name, "approved": allowed},
             )
         if not allowed:
-            denied_result = ToolResult(status="policy_denied", summary=decision.reason)
+            denied_result = ToolResult(status="policy_denied", summary=denied_reason)
             self._model_tool_results[call.id] = denied_result.model_dump()
+            failed_plan_payload = self.plan.record_tool_result(call.name, denied_result)
+            if failed_plan_payload is not None:
+                await self._trace(
+                    session_id,
+                    run_id,
+                    "plan_failed",
+                    "policy",
+                    {"tool": call.name, **failed_plan_payload},
+                )
+                yield PlanFailed(
+                    session_id=session_id,
+                    run_id=run_id,
+                    payload={"tool": call.name, **failed_plan_payload},
+                )
             yield ToolFinished(
                 session_id=session_id,
                 run_id=run_id,
@@ -309,6 +413,20 @@ class AgentRuntime:
                 "artifact": artifact,
             },
         )
+        failed_plan_payload = self.plan.record_tool_result(call.name, final)
+        if failed_plan_payload is not None:
+            await self._trace(
+                session_id,
+                run_id,
+                "plan_failed",
+                "policy",
+                {"tool": call.name, **failed_plan_payload},
+            )
+            yield PlanFailed(
+                session_id=session_id,
+                run_id=run_id,
+                payload={"tool": call.name, **failed_plan_payload},
+            )
         yield ToolFinished(
             session_id=session_id,
             run_id=run_id,

@@ -20,11 +20,19 @@ class WorkspacePathPolicy:
         "__pycache__",
         "node_modules",
     }
-    _sensitive_parts = {".ssh", "credentials", "secrets", "token"}
-    _sensitive_name = re.compile(
-        r"(?i)(^\.env(?:\.|$)|(^|[-_.])(credential|secret|token)([-_.]|$)|"
-        r"private[-_.]?key|^id_(rsa|ecdsa|ed25519)$)"
-    )
+    _sensitive_directories = {".ssh", "credentials", "secrets"}
+    _sensitive_file_stems = {
+        "api-key",
+        "api_key",
+        "apikey",
+        "credential",
+        "credentials",
+        "secret",
+        "secrets",
+        "token",
+        "tokens",
+    }
+    _private_key_name = re.compile(r"(?i)(private[-_.]?key|^id_(rsa|ecdsa|ed25519)$)")
     _sensitive_suffixes = {".pem", ".key", ".p12", ".pfx"}
 
     def __init__(self, workspace: Path) -> None:
@@ -44,11 +52,8 @@ class WorkspacePathPolicy:
         except ValueError:
             return True
         lower_parts = {part.lower() for part in relative.parts}
-        name = relative.name
-        return (
-            bool(lower_parts & self._sensitive_parts)
-            or bool(self._sensitive_name.search(name))
-            or relative.suffix.lower() in self._sensitive_suffixes
+        return bool(lower_parts & self._sensitive_directories) or _sensitive_file_name(
+            relative.name
         )
 
     def is_excluded_from_snapshot(self, path: Path) -> bool:
@@ -66,6 +71,43 @@ class WorkspacePathPolicy:
     def dockerignore_patterns(self) -> list[str]:
         """供外部搜索工具使用的排除模式。"""
         patterns = [f"!{directory}/**" for directory in sorted(self._excluded_directories)]
-        patterns.extend(["!.env*", "!**/.env*", "!**/*credential*", "!**/*secret*", "!**/*token*"])
+        patterns.extend(
+            [
+                "!.env*",
+                "!**/.env*",
+                "!**/.ssh/**",
+                "!**/credentials/**",
+                "!**/secrets/**",
+                "!**/api-key.*",
+                "!**/api_key.*",
+                "!**/apikey.*",
+                "!**/credential.*",
+                "!**/credentials.*",
+                "!**/secret.*",
+                "!**/secrets.*",
+                "!**/token.*",
+                "!**/tokens.*",
+                "!**/private-key.*",
+                "!**/private_key.*",
+                "!**/privatekey.*",
+                "!**/id_rsa",
+                "!**/id_ecdsa",
+                "!**/id_ed25519",
+            ]
+        )
         patterns.extend([f"!**/*{suffix}" for suffix in sorted(self._sensitive_suffixes)])
         return patterns
+
+
+def _sensitive_file_name(name: str) -> bool:
+    lower = name.lower()
+    if lower == ".env" or lower.startswith(".env."):
+        return True
+    if Path(lower).suffix in WorkspacePathPolicy._sensitive_suffixes:
+        return True
+    if WorkspacePathPolicy._private_key_name.fullmatch(lower):
+        return True
+    stem = Path(lower).stem
+    return stem in WorkspacePathPolicy._sensitive_file_stems or bool(
+        WorkspacePathPolicy._private_key_name.fullmatch(stem)
+    )

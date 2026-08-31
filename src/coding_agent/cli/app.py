@@ -21,6 +21,33 @@ app = typer.Typer(help="安全优先的本地编程 Agent。", no_args_is_help=T
 
 class TerminalApproval(ApprovalProvider):
     async def request(self, tool_name: str, reason: str, params: dict[str, object]) -> bool:
+        objective = params.get("objective")
+        if isinstance(objective, str) and objective:
+            typer.echo("目标：\n" + objective)
+        plan = params.get("plan")
+        if isinstance(plan, str) and plan:
+            typer.echo("计划：\n" + plan)
+        steps = params.get("steps")
+        if isinstance(steps, list) and steps:
+            typer.echo("步骤：" + ", ".join(str(item) for item in steps))
+        files = params.get("files")
+        if isinstance(files, list) and files:
+            typer.echo("预计修改文件：" + ", ".join(str(item) for item in files))
+        verification = params.get("verification_commands")
+        if isinstance(verification, list) and verification:
+            typer.echo("验证命令：" + ", ".join(str(item) for item in verification))
+        risks = params.get("risks")
+        if isinstance(risks, list) and risks:
+            typer.echo("风险：" + ", ".join(str(item) for item in risks))
+        revision_of = params.get("revision_of")
+        if isinstance(revision_of, str) and revision_of:
+            typer.echo("修订自计划：" + revision_of)
+        failure_summary = params.get("failure_summary")
+        if isinstance(failure_summary, str) and failure_summary:
+            typer.echo("上次失败：" + failure_summary)
+        changed_approach = params.get("changed_approach")
+        if isinstance(changed_approach, str) and changed_approach:
+            typer.echo("调整方案：" + changed_approach)
         command = params.get("command")
         if isinstance(command, str):
             typer.echo("沙箱命令：\n" + command)
@@ -39,12 +66,14 @@ def _build_agent(
     model: str | None,
     allow_write: bool,
     allow_shell: bool,
+    plan_mode: bool,
     non_interactive: bool,
     sandbox_image: str | None = None,
 ) -> CodingAgent:
     overrides: dict[str, object] = {
         "allow_write": allow_write,
         "allow_shell": allow_shell,
+        "plan_mode": plan_mode,
         "non_interactive": non_interactive,
     }
     if provider is not None:
@@ -74,6 +103,7 @@ def run(
     model: Annotated[str | None, typer.Option("--model")] = None,
     allow_write: Annotated[bool, typer.Option("--allow-write")] = False,
     allow_shell: Annotated[bool, typer.Option("--allow-shell")] = False,
+    plan_mode: Annotated[bool, typer.Option("--plan")] = False,
     sandbox_image: Annotated[str | None, typer.Option("--sandbox-image")] = None,
     non_interactive: Annotated[bool, typer.Option("--non-interactive")] = False,
 ) -> None:
@@ -81,7 +111,14 @@ def run(
     asyncio.run(
         _run_once(
             _build_agent(
-                workspace, provider, model, allow_write, allow_shell, non_interactive, sandbox_image
+                workspace,
+                provider,
+                model,
+                allow_write,
+                allow_shell,
+                plan_mode,
+                non_interactive,
+                sandbox_image,
             ),
             task,
         )
@@ -97,6 +134,7 @@ def chat(
     model: Annotated[str | None, typer.Option("--model")] = None,
     allow_write: Annotated[bool, typer.Option("--allow-write")] = False,
     allow_shell: Annotated[bool, typer.Option("--allow-shell")] = False,
+    plan_mode: Annotated[bool, typer.Option("--plan")] = False,
     sandbox_image: Annotated[str | None, typer.Option("--sandbox-image")] = None,
     non_interactive: Annotated[bool, typer.Option("--non-interactive")] = False,
     resume: Annotated[str | None, typer.Option("--resume")] = None,
@@ -104,7 +142,14 @@ def chat(
 ) -> None:
     """启动独占的连续聊天会话。"""
     agent = _build_agent(
-        workspace, provider, model, allow_write, allow_shell, non_interactive, sandbox_image
+        workspace,
+        provider,
+        model,
+        allow_write,
+        allow_shell,
+        plan_mode,
+        non_interactive,
+        sandbox_image,
     )
     asyncio.run(_chat_loop(agent, resume, force_unlock))
 
@@ -185,6 +230,18 @@ def _render_event(event: AgentEvent) -> None:
     elif event.type == "approval_resolved":
         approval_label = "已批准" if event.payload.get("approved") else "已拒绝"
         typer.echo(f"\n审批结果：{event.payload.get('tool')} {approval_label}")
+    elif event.type == "plan_approved":
+        plan_id = event.payload.get("current_plan_id", "")
+        revision_count = event.payload.get("revision_count", 0)
+        typer.echo(f"\n计划已批准：{plan_id}，修订次数：{revision_count}")
+    elif event.type == "plan_rejected":
+        typer.echo("\n计划已拒绝：高风险工具仍保持阻塞")
+    elif event.type == "plan_failed":
+        reason = event.payload.get("last_failure_summary", "")
+        typer.echo(f"\n计划已失效：{reason}")
+    elif event.type == "plan_revision_required":
+        reason = event.payload.get("reason", "")
+        typer.echo(f"\n需要修订计划：{reason}")
     elif event.type == "tool_finished":
         tool_result = event.payload.get("result")
         if isinstance(tool_result, dict) and tool_result.get("status") != "success":
@@ -236,6 +293,19 @@ def _quote_cli_arg(value: str) -> str:
 def _status_text(session: ChatSession) -> str:
     summary = session.summary
     snapshot = session.token_snapshot()
+    plan_line = ""
+    if session._agent.config.plan_mode:
+        plan_status = getattr(summary, "last_plan_status", "") or "draft_required"
+        plan_id = getattr(summary, "last_plan_id", "")
+        revision_count = getattr(summary, "plan_revision_count", 0)
+        plan_line = (
+            f"Plan 状态：{plan_status}"
+            f"{'；ID：' + plan_id if plan_id else ''}"
+            f"；修订次数：{revision_count}\n"
+        )
+        last_failure = getattr(summary, "last_plan_failure", "")
+        if last_failure:
+            plan_line += f"最近计划失败：{last_failure}\n"
     return (
         f"会话 ID：{summary.session_id}\n模型：{summary.model_name}\n"
         f"上下文消息：{summary.message_count}\n"
@@ -250,6 +320,8 @@ def _status_text(session: ChatSession) -> str:
         f"最近压缩：节省 {snapshot.last_compacted_tokens_saved:,} token"
         f"（累计 {snapshot.total_compacted_tokens_saved:,}）\n"
         f"累计运行时间：{summary.total_duration_ms:.0f} ms\n"
+        f"Plan Mode：{'是' if session._agent.config.plan_mode else '否'}\n"
+        f"{plan_line}"
         f"授权：write={'是' if session._agent.config.allow_write else '否'}，"
         f"Docker 沙箱={'是' if session._agent.config.allow_shell else '否'}"
     )

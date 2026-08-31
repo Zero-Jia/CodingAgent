@@ -58,6 +58,26 @@ class ApprovalResolved(AgentEventBase):
     type: Literal["approval_resolved"] = "approval_resolved"
 
 
+class PlanSubmitted(AgentEventBase):
+    type: Literal["plan_submitted"] = "plan_submitted"
+
+
+class PlanApproved(AgentEventBase):
+    type: Literal["plan_approved"] = "plan_approved"
+
+
+class PlanRejected(AgentEventBase):
+    type: Literal["plan_rejected"] = "plan_rejected"
+
+
+class PlanFailed(AgentEventBase):
+    type: Literal["plan_failed"] = "plan_failed"
+
+
+class PlanRevisionRequired(AgentEventBase):
+    type: Literal["plan_revision_required"] = "plan_revision_required"
+
+
 class RunFinished(AgentEventBase):
     type: Literal["run_finished"] = "run_finished"
 
@@ -82,6 +102,11 @@ AgentEvent = (
     | ToolFinished
     | ApprovalRequested
     | ApprovalResolved
+    | PlanSubmitted
+    | PlanApproved
+    | PlanRejected
+    | PlanFailed
+    | PlanRevisionRequired
     | RunFinished
     | RunFailed
     | RunCancelled

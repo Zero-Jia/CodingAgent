@@ -38,11 +38,30 @@ class FakeExecutor:
 def test_workspace_path_policy_protects_sensitive_and_internal_paths(tmp_path: Path) -> None:
     policy = WorkspacePathPolicy(tmp_path)
     assert policy.is_protected(tmp_path / ".env")
+    assert policy.is_protected(tmp_path / ".env.local")
     assert policy.is_protected(tmp_path / "nested" / "secrets" / "db.txt")
+    assert policy.is_protected(tmp_path / ".ssh" / "id_rsa")
     assert policy.is_protected(tmp_path / ".coding-agent" / "session.jsonl")
     assert policy.is_protected(tmp_path / "private.pem")
     assert policy.is_protected(tmp_path / "private-key.txt")
+    assert policy.is_protected(tmp_path / "credentials.json")
+    assert policy.is_protected(tmp_path / "token.txt")
     assert not policy.is_protected(tmp_path / "src" / "main.py")
+
+
+def test_workspace_path_policy_allows_secret_like_source_names(tmp_path: Path) -> None:
+    policy = WorkspacePathPolicy(tmp_path)
+
+    allowed = [
+        "src/coding_agent/runtime/token_usage.py",
+        "tests/test_token_usage.py",
+        "src/auth/token_validator.py",
+        "src/security/secret_scanner.py",
+        "docs/token_usage.md",
+    ]
+
+    for relative in allowed:
+        assert not policy.is_protected(tmp_path / relative), relative
 
 
 def test_snapshot_filters_sensitive_internal_and_symlink_files(tmp_path: Path) -> None:
@@ -72,6 +91,56 @@ def test_snapshot_filters_sensitive_internal_and_symlink_files(tmp_path: Path) -
             assert not root.exists()
 
     asyncio.run(create_and_check())
+
+
+def test_snapshot_keeps_secret_like_source_names_without_leaking_sensitive_files(
+    tmp_path: Path,
+) -> None:
+    source_files = {
+        "src/coding_agent/runtime/token_usage.py": "TOKEN_USAGE = True\n",
+        "tests/test_token_usage.py": "def test_token_usage():\n    assert True\n",
+        "src/auth/token_validator.py": "def validate_token():\n    return True\n",
+    }
+    sensitive_files = {
+        ".env": "TOKEN=secret\n",
+        "secrets/db.txt": "password\n",
+        ".ssh/id_rsa": "private-key\n",
+        "private.key": "private-key\n",
+        "credentials.json": "{}\n",
+    }
+    for relative, content in {**source_files, **sensitive_files}.items():
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    async def create_and_check() -> None:
+        snapshots = SnapshotService(tmp_path)
+        snapshot = await snapshots.create()
+        try:
+            assert set(source_files) <= set(snapshot.files)
+            assert not set(sensitive_files) & set(snapshot.files)
+            with tarfile.open(snapshot.archive) as archive:
+                names = set(archive.getnames())
+            assert set(source_files) <= names
+            assert not set(sensitive_files) & names
+        finally:
+            await snapshots.cleanup(snapshot)
+
+    asyncio.run(create_and_check())
+
+
+def test_current_project_source_names_are_not_treated_as_sensitive() -> None:
+    root = Path(__file__).resolve().parents[1]
+    policy = WorkspacePathPolicy(root)
+
+    for relative in (
+        "src/coding_agent/runtime/token_usage.py",
+        "src/coding_agent/tools/plan.py",
+        "tests/test_plan_mode.py",
+    ):
+        path = root / relative
+        assert path.exists(), relative
+        assert not policy.is_protected(path), relative
 
 
 def test_patch_registry_applies_matching_sandbox_patch(tmp_path: Path) -> None:

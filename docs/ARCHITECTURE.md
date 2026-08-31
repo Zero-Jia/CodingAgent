@@ -4,7 +4,7 @@
 
 ## 当前定位
 
-`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、Model Gateway 与 DeepSeek 模型适配器、事件驱动运行时、Docker 沙箱执行、基于 patch 的宿主机写回、JSONL 会话持久化、provider usage token 统计、脱敏 trace 存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
+`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、Model Gateway 与 DeepSeek 模型适配器、事件驱动运行时、显式 Plan Mode、Docker 沙箱执行、基于 patch 的宿主机写回、JSONL 会话持久化、provider usage token 统计、脱敏 trace 存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
 
 当前项目还不是完整企业级平台。它尚未实现 Web UI、FastAPI 服务、PostgreSQL、Milvus、Redis、MCP、Skills、Hooks、真实 memory 检索、模型辅助上下文摘要、多 agent 编排和 worktree 隔离。
 
@@ -63,6 +63,7 @@
 当前文件：
 
 - `loop.py`：执行单个 agent 回合，处理模型流、工具调用、审批、trace 和 artifact。
+- `plan.py`：维护 Plan Mode 状态机，记录当前计划状态、计划 ID、修订次数和最近一次失败。
 - `context.py`：负责 token 估算、确定性 compact、近期消息保留和 tool call/result 边界保护。
 - `token_usage.py`：维护 session 级 token 账本，用 provider usage 作为真实消耗来源，并对锚点后的新增上下文做估算。
 - `events.py`：CLI 以及未来 API/TUI 客户端消费的公开事件类型。
@@ -74,6 +75,8 @@
 - Context manager 会在长历史接近预算时生成确定性 compact summary，并保留近期消息原文。
 - Compact 会发出 `context_compacted` 事件，并写入 session event 和 trace。
 - Runtime 会把模型返回的 usage 提升为 `model_usage_reported` 事件；`ChatSession` 聚合后发出 `token_usage_updated`，并更新 session summary。
+- Plan Mode 开启时，runtime 会在 `sandbox_shell`、`verify` 和 `apply_patch` 前强制要求已有获批的 `submit_plan`。
+- 已获批计划覆盖的高风险工具一旦返回非 success，runtime 会发出 `plan_failed`，把计划状态改为 `failed`；后续高风险工具会先收到 `plan_revision_required` 并被拒绝，直到模型提交包含失败摘要和调整策略的修订计划并获批。
 - 支持最大 turn 数和最大工具调用数限制。
 - 通过 `TraceStore` 写入 trace 事件。
 - 在存在 artifact writer 时保存完整工具输出。
@@ -87,9 +90,8 @@
 
 - 增加模型辅助 compact summary。
 - 增强工具输出摘要策略。
-- 增加 plan mode。
 - 对安全的只读工具做批量或并发执行。
-- 增加结构化 retry 和 recovery 逻辑。
+- 在 Plan Mode 之上增加更细粒度的结构化 retry 分类和恢复策略。
 
 ### `coding_agent.agent`
 
@@ -120,10 +122,12 @@
 - `contracts.py`：工具协议、上下文、更新事件和结果模型。
 - `builtin.py`：`read`、`search`、`edit`、`write`、`shell`、`git_diff`。
 - `sandbox.py`：`sandbox_shell`、`verify`、`apply_patch`。
+- `plan.py`：`submit_plan`，用于在 Plan Mode 下提交计划审批。
 
 当前状态：
 
 - Runtime 当前暴露只读工具、沙箱工具和 patch 工具。
+- `--plan` 开启后，runtime 额外暴露 `submit_plan`，并把计划审批作为高风险工具前置门禁；失败后的修订计划必须说明 `revision_of`、`failure_summary` 和 `changed_approach`。
 - 宿主机 `shell` 被 policy 明确拒绝。
 - 直接 `edit` 和 `write` 已有实现，但不在默认 runtime 工具列表中。
 
@@ -149,6 +153,7 @@
 当前状态：
 
 - 快照会排除敏感文件、内部状态、虚拟环境、缓存、符号链接和大文件。
+- 敏感文件过滤使用精确目录、文件名和密钥后缀规则，避免把 `token_usage.py`、`test_token_usage.py` 等正常源码误判为敏感文件。
 - Docker 通过 stdin 接收快照，不挂载宿主工作区。
 - Docker 使用 `--network none`、`--read-only`、非 root 用户、`no-new-privileges`、删除 capabilities、PID/内存/CPU 限制和 tmpfs workspace。
 - Patch 应用会拒绝二进制 patch、子模块、文件模式变化、符号链接、可执行权限变化、重命名、复制、敏感路径、changed-file 不一致以及宿主并发修改。
