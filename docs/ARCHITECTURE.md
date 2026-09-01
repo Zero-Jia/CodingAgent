@@ -4,9 +4,9 @@
 
 ## 当前定位
 
-`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、Model Gateway 与 DeepSeek 模型适配器、事件驱动运行时、显式 Plan Mode、Docker 沙箱执行、沙箱执行前 command risk detector、基于 patch 的宿主机写回、JSONL 会话持久化、provider usage token 统计、脱敏 trace 存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
+`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、最小 FastAPI/SSE 服务入口、Model Gateway 与 DeepSeek 模型适配器、事件驱动运行时、显式 Plan Mode、Docker 沙箱执行、沙箱执行前 command risk detector、基于 patch 的宿主机写回、JSONL 会话持久化、provider usage token 统计、脱敏 trace 存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
 
-当前项目还不是完整企业级平台。它尚未实现 Web UI、FastAPI 服务、PostgreSQL、Milvus、Redis、MCP、Skills、Hooks、真实 memory 检索、模型辅助上下文摘要、多 agent 编排和 worktree 隔离。
+当前项目还不是完整企业级平台。它尚未实现 Web UI、认证授权、持久化审批队列、PostgreSQL、Milvus、Redis、MCP、Skills、Hooks、真实 memory 检索、模型辅助上下文摘要、多 agent 编排和 worktree 隔离。
 
 ## 核心设计原则
 
@@ -295,6 +295,37 @@
 - 增加安全拒绝任务集。
 - 增加 benchmark 报告。
 
+### `coding_agent.api`
+
+职责：HTTP/SSE 服务入口。
+
+当前文件：
+
+- `app.py`：FastAPI app factory、会话/run 内存索引、SSE 事件序列化和取消入口。
+
+当前状态：
+
+- `create_app()` 可以用环境配置创建真实 agent，也可以在测试中注入 fake model 的 `CodingAgent`。
+- `POST /v1/sessions` 支持创建或恢复会话。
+- `GET /v1/sessions` 和 `GET /v1/sessions/{session_id}` 支持读取会话摘要。
+- `POST /v1/sessions/{session_id}/messages/stream` 复用 `ChatSession.send()`，以 Server-Sent Events 原样返回 `AgentEvent`。
+- `POST /v1/runs/{run_id}/cancel` 和 `POST /v1/sessions/{session_id}/cancel` 支持取消当前活跃运行。
+- API 层持有现有 session lock，避免与 CLI 或另一个 API 进程同时写入同一会话。
+- API 层不新增宿主机 shell、直接文件写入或绕过 patch approval 的能力。
+
+已知限制：
+
+- 当前没有认证授权，默认只适合本地可信回环地址。
+- 当前没有 Web 审批响应接口；未预授权的 shell/write/plan approval 仍会按 runtime 策略拒绝。
+- 当前 active run registry 是进程内状态；多 worker 部署需要 Redis 或数据库锁。
+
+后续工作：
+
+- 增加认证和 CORS 配置。
+- 增加 Web 审批接口和持久化 approval queue。
+- 增加 WebSocket 事件流或保留 SSE 作为稳定协议。
+- 将 active run、审批和会话锁迁移到 Redis/PostgreSQL。
+
 ### `coding_agent.cli`
 
 职责：本地命令行入口。
@@ -305,14 +336,14 @@
 
 当前状态：
 
-- CLI 是唯一用户界面。
+- CLI 是当前唯一交互式用户界面；FastAPI 是服务入口，尚未包含前端 UI。
 - 审批在终端中完成。
 - `/status` 会显示当前 session 的累计 token 消耗、当前上下文 token、窗口占比和最近 compact 节省量。
 
 后续工作：
 
 - 保留 CLI 作为开发者入口。
-- 在同一个 `CodingAgent` API 上增加 FastAPI/WebSocket 服务。
+- 在同一个 `CodingAgent` API 上增加 WebSocket 服务或继续扩展 SSE 协议。
 - 增加 Web 审批界面。
 
 ## 质量门禁
@@ -331,6 +362,6 @@ uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovid
 - `ruff check`：通过。
 - `mypy`：通过。
 - `mypy src`：通过。
-- `pytest`：28 passed，1 skipped。
+- `pytest`：95 passed，1 skipped。
 
 普通 `uv run pytest` 在 Codex 沙箱账户下可能失败，因为它可能尝试写入 `C:\Users\HP\AppData\Local\Temp\pytest-of-HP`。

@@ -22,7 +22,7 @@ uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovid
 
 ## 最近一次验证结果
 
-日期：2026-08-31
+日期：2026-09-01
 
 环境：
 
@@ -32,6 +32,18 @@ uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovid
 
 结果：
 
+锁文件更新：
+
+```text
+uv --cache-dir .uv-cache lock
+Resolved 32 packages in 3.34s
+Added fastapi v0.116.1
+Added starlette v0.47.3
+Added uvicorn v0.35.0
+```
+
+初次在受限网络沙箱中运行 `uv --cache-dir .uv-cache lock` 失败，错误为访问 PyPI socket 被拒绝；经授权后成功。
+
 ```text
 uv --cache-dir .uv-cache run ruff check
 All checks passed!
@@ -39,33 +51,35 @@ All checks passed!
 
 ```text
 uv --cache-dir .uv-cache run mypy
-Success: no issues found in 41 source files
+Success: no issues found in 43 source files
 ```
 
 ```text
 uv --cache-dir .uv-cache run mypy src
-Success: no issues found in 41 source files
+Success: no issues found in 43 source files
 ```
 
-定向 command risk、policy 和 runtime 测试：
+定向 API 测试：
+
+```text
+uv --cache-dir .uv-cache run pytest tests/test_api.py --basetemp .codex-test-tmp-api -p no:cacheprovider
+7 passed
+```
+
+全量测试：
+
+```text
+uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-fastapi-final -p no:cacheprovider
+95 passed, 1 skipped
+```
+
+本轮新增 FastAPI/SSE 服务入口后，自动化测试仍不依赖真实 DeepSeek API，也不启动 Docker。
+
+历史验证摘要：
 
 ```text
 uv --cache-dir .uv-cache run pytest tests/test_command_risk.py tests/test_policy_and_tools.py tests/test_runtime.py --basetemp .codex-test-tmp-risk -p no:cacheprovider
 42 passed
-```
-
-定向 sandbox 安全过滤测试：
-
-```text
-uv --cache-dir .uv-cache run pytest tests/test_sandbox.py --basetemp .codex-test-tmp-security -p no:cacheprovider
-14 passed, 1 skipped
-```
-
-定向 Plan Mode 测试：
-
-```text
-uv --cache-dir .uv-cache run pytest tests/test_plan_mode.py --basetemp .codex-test-tmp-plan-recovery-3 -p no:cacheprovider
-10 passed
 ```
 
 当前仓库 snapshot smoke test：
@@ -100,7 +114,7 @@ uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-risk-final2 -p no
 88 passed, 1 skipped
 ```
 
-在完成 command risk detector 后，以上验证集已重新执行。本轮新增自动化测试不依赖真实 DeepSeek API，也不启动 Docker；此前额外 Docker smoke test 已确认沙箱 `/workspace` 中包含 `token_usage.py`，并可运行 `tests/test_plan_mode.py`。
+在完成 command risk detector 后，以上历史验证集已重新执行；此前额外 Docker smoke test 已确认沙箱 `/workspace` 中包含 `token_usage.py`，并可运行 `tests/test_plan_mode.py`。
 
 ## 已知本地环境问题
 

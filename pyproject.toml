@@ -5,9 +5,11 @@ description = "A security-first, local Windows coding agent"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "fastapi==0.116.1",
   "httpx==0.28.1",
   "pydantic==2.11.7",
   "typer==0.16.0",
+  "uvicorn==0.35.0",
 ]
 
 [project.scripts]

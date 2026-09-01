@@ -209,7 +209,7 @@
 
 ### 10. FastAPI 服务
 
-状态：未开始。
+状态：已完成。
 
 任务：
 
@@ -222,6 +222,16 @@
 - API 可以发送消息。
 - API 可以流式返回事件。
 - API 可以取消 run。
+
+完成记录：
+
+- 新增 `coding_agent.api.app`，提供 FastAPI app factory 和 `ApiSessionManager`。
+- API 复用 `CodingAgent` 与 `ChatSession`，不复制 runtime，也不新增宿主机 shell 或直接写入能力。
+- 新增 `GET /health`、`POST /v1/sessions`、`GET /v1/sessions`、`GET /v1/sessions/{session_id}`、`POST /v1/sessions/{session_id}/messages/stream`、`POST /v1/runs/{run_id}/cancel` 和 `POST /v1/sessions/{session_id}/cancel`。
+- 消息接口使用 Server-Sent Events 原样返回 `AgentEvent`，便于后续前端 UI 渲染流式文本、工具事件、审批事件、token 事件和完成/失败/取消事件。
+- API 层复用现有 session lock，并用进程内 active run registry 防止同一会话并发发送和支持取消。
+- 新增 `tests/test_api.py`，使用 fake model 覆盖创建/列出 session、SSE 事件流、未知 session、非法 session id、空消息、取消活跃运行和取消不存在的 run。
+- 当前未实现认证授权、Web 审批响应接口、持久化 approval queue 和跨进程 active run registry；这些仍属于后续平台化任务。
 
 ### 11. PostgreSQL 存储
 

@@ -8,6 +8,7 @@
 
 - 基于 `src/coding_agent` 的 Python 3.12 包结构。
 - Typer CLI。
+- 最小 FastAPI/SSE 服务入口，复用 `CodingAgent` 和 `ChatSession`。
 - Model Gateway provider registry，当前注册 `deepseek`。
 - DeepSeek 模型适配器。
 - 供应商无关的模型和工具契约。
@@ -32,7 +33,7 @@
 
 当前尚未实现：
 
-- FastAPI 或 Web UI。
+- Web UI、认证授权、持久化审批队列。
 - PostgreSQL、Milvus、Redis。
 - MCP。
 - Skills。
@@ -98,8 +99,8 @@
 
 任务：
 
-- 基于现有 `CodingAgent` API 增加 FastAPI app。
-- 增加 WebSocket 或 SSE 事件流。
+- 已完成：基于现有 `CodingAgent` API 增加最小 FastAPI app。
+- 已完成：增加 SSE 事件流。
 - 增加 PostgreSQL schema，覆盖 sessions、runs、turns、events、tools、approvals、patches、artifacts、model usage 和 audit logs。
 - 增加 SQLAlchemy repository。
 - 增加 Alembic migration。
@@ -110,6 +111,7 @@
 验收标准：
 
 - CLI 和 API 复用同一套 runtime。
+- API 可以创建 session、发送消息、流式返回事件并取消活跃 run。
 - JSONL 仍可作为本地开发模式。
 - PostgreSQL 实现通过 repository contract tests。
 - 审批状态在进程重启后仍然存在。

@@ -33,6 +33,7 @@
 
 - `src/coding_agent` 下的 Python 包结构。
 - Typer CLI，支持一次性 `run` 和连续 `chat` 模式。
+- 最小 FastAPI/SSE 服务入口，复用 `CodingAgent` 和 `ChatSession`。
 - Model Gateway provider registry，当前已实现 `deepseek` provider。
 - DeepSeek 模型适配器。
 - 供应商无关的模型、消息、工具调用、usage 和事件契约。
@@ -57,8 +58,9 @@
 
 尚未实现：
 
-- FastAPI 服务。
 - Web UI。
+- 认证授权。
+- 持久化审批队列。
 - PostgreSQL。
 - Milvus。
 - Redis。
@@ -74,6 +76,50 @@
 ## 最近一次 Session
 
 本轮完成：
+
+- 参考 `D:\Software\MewCode` 的 remote WebSocket 事件桥接、浏览器 UI 事件消费和 background task cancel 思路，给当前项目增加最小 FastAPI/SSE 服务入口。
+- 新增 `coding_agent.api.app`，提供 `create_app()` factory、`ApiSessionManager`、会话/run 内存索引、SSE 序列化和取消入口。
+- API 复用现有 `CodingAgent` 与 `ChatSession`，不复制 runtime，不新增宿主机 shell、直接文件写入或绕过 patch-only 写回的能力。
+- 新增 `GET /health`、`POST /v1/sessions`、`GET /v1/sessions`、`GET /v1/sessions/{session_id}`、`POST /v1/sessions/{session_id}/messages/stream`、`POST /v1/runs/{run_id}/cancel` 和 `POST /v1/sessions/{session_id}/cancel`。
+- `messages/stream` 以 Server-Sent Events 原样返回 `AgentEvent`，便于后续前端 UI 渲染流式文本、工具事件、审批事件、token usage、完成、失败和取消。
+- API 层复用现有 session lock，避免 CLI 或另一个 API 进程同时写入同一会话；同一进程内用 active session/run registry 防止并发发送并支持取消。
+- 新增严格 session_id/run_id 校验，拒绝路径穿越式 ID。
+- 新增 `tests/test_api.py`，使用 fake model 覆盖创建/列出 session、SSE 事件流、未知 session、非法 session id、空消息、取消活跃运行和取消不存在的 run。
+- `pyproject.toml` 和 `uv.lock` 增加 FastAPI、Starlette 和 uvicorn 依赖。
+
+本轮修改文件：
+
+- `README.md`
+- `pyproject.toml`
+- `uv.lock`
+- `src/coding_agent/api/__init__.py`
+- `src/coding_agent/api/app.py`
+- `tests/test_api.py`
+- `docs/ARCHITECTURE.md`
+- `docs/ROADMAP.md`
+- `docs/TASKS.md`
+- `docs/SESSION_HANDOFF.md`
+- `docs/VERIFICATION.md`
+
+本轮验证结果：
+
+- `uv --cache-dir .uv-cache lock`：通过，新增 fastapi 0.116.1、starlette 0.47.3、uvicorn 0.35.0。
+- `uv --cache-dir .uv-cache run ruff check`：通过。
+- `uv --cache-dir .uv-cache run mypy src tests/test_api.py`：通过，44 source files。
+- `uv --cache-dir .uv-cache run pytest tests/test_api.py --basetemp .codex-test-tmp-api -p no:cacheprovider`：7 passed。
+- `uv --cache-dir .uv-cache run mypy`：通过，43 source files。
+- `uv --cache-dir .uv-cache run mypy src`：通过，43 source files。
+- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-fastapi-final -p no:cacheprovider`：95 passed，1 skipped。
+
+本轮未完成事项：
+
+- 没有实现前端 UI。
+- 没有实现认证、CORS 策略、RBAC 或多租户。
+- 没有实现 Web 审批响应接口或持久化 approval queue；未预授权的 shell/write/plan approval 仍会按 runtime 策略拒绝。
+- Active run registry 仍是进程内状态；多 worker 部署还需要 Redis 或数据库锁。
+- Pending patch 仍只在单个 runtime 内存中有效，尚未持久化。
+
+上轮完成：
 
 - 参考 `D:\Software\MewCode` 的 `DangerousCommandDetector` 和权限分层思路，给当前项目增加沙箱执行前 command risk detector。
 - 新增 `coding_agent.policy.command_risk`，定义 `normal`、`suspicious`、`dangerous` 三类命令风险。
@@ -181,20 +227,20 @@
 
 建议下一轮任务：
 
-从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若严格按当前最高优先级推进，建议做 P2 `FastAPI 服务` 的最小 API/SSE 入口；若继续补 P1 交互体验，可以先做 `CLI slash command registry`。若优先补工程化，也可以先增加 coverage 或 pre-commit。
+从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若严格按当前最高优先级推进，建议做 P2 `PostgreSQL 存储` 的最小 repository/schema/migration；如果想先让 API 更可用，也可以做 `审批 UI/API` 的最小 Web patch 审批流程。若优先补工程化，可以先增加 coverage 或 pre-commit。
 
 建议 prompt：
 
 ```text
-本轮只做 FastAPI 服务的最小入口，不重构 runtime。请基于现有 CodingAgent API 增加创建 session、发送消息、流式事件和取消 run 的接口，增加 mock model 测试，完成后运行 ruff、mypy、pytest，并更新 docs/SESSION_HANDOFF.md 和 docs/VERIFICATION.md。
+本轮只做 PostgreSQL 存储的最小入口，不重构 runtime。请在现有 store protocol 后面增加 PostgreSQL schema、SQLAlchemy repository 和 Alembic migration，并保留 JSONL 本地模式。增加 repository contract tests，完成后运行 ruff、mypy、pytest，并更新 docs/SESSION_HANDOFF.md 和 docs/VERIFICATION.md。
 ```
 
 验收标准：
 
-- CLI 和 API 复用同一套 `CodingAgent` runtime。
-- API 可以创建 session、发送消息、流式返回事件并取消 run。
+- JSONL 仍可作为本地开发模式。
+- PostgreSQL repository 与 JSONL store 的核心行为通过 contract tests。
+- migration 可创建 sessions、runs、events、approvals、artifacts 和 model usage 的基础表。
 - 自动化测试不依赖真实 DeepSeek API。
-- 现有安全边界不变。
 - `uv --cache-dir .uv-cache run ruff check`、`uv --cache-dir .uv-cache run mypy`、`uv --cache-dir .uv-cache run mypy src` 和 `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider` 通过。
 
 ## 后续 Session 工作规则

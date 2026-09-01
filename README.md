@@ -27,6 +27,9 @@ uv run agent chat --workspace . --plan
 
 # 显式选择模型 provider 和模型名；当前已实现 provider 为 deepseek
 uv run agent chat --workspace . --provider deepseek --model deepseek-chat
+
+# 启动最小 FastAPI 服务；默认从环境变量读取模型配置
+uv run uvicorn coding_agent.api.app:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
 `agent chat` 是连续会话模式：同一个终端中的每次提问都会复用会话上下文。输入 `/help` 查看命令，输入 `/exit` 保存并退出。同一会话只能由一个终端持有；异常退出后的失效锁可在确认原进程不在运行后使用 `--force-unlock` 清理。
@@ -78,9 +81,22 @@ $env:CODING_AGENT_SANDBOX_IMAGE = "coding-agent-sandbox:python-3.12"
 
 DeepSeek 适配器使用兼容 OpenAI 的 Chat Completions SSE 协议。所有 Agent 运行均使用真实模型配置。
 
+## FastAPI 服务
+
+当前提供最小 FastAPI 服务入口，用于后续 Web UI、审批控制台和后台 worker 复用同一套 runtime：
+
+- `GET /health`：健康检查和当前 workspace/model 摘要。
+- `POST /v1/sessions`：创建或恢复会话。
+- `GET /v1/sessions`：列出本工作区会话摘要。
+- `GET /v1/sessions/{session_id}`：读取单个会话摘要。
+- `POST /v1/sessions/{session_id}/messages/stream`：发送消息并以 Server-Sent Events 返回 `AgentEvent`。
+- `POST /v1/runs/{run_id}/cancel` 和 `POST /v1/sessions/{session_id}/cancel`：取消活跃运行。
+
+API 层只封装 `CodingAgent` 和 `ChatSession`，不复制 agent loop，也不新增宿主机写入或宿主机 shell 能力。服务进程会复用现有 session lock，避免与 CLI 或另一个 API 进程同时写入同一会话。当前尚未实现 Web UI、认证、持久化审批队列和多进程分布式锁；生产部署前需要补齐这些能力。
+
 ## 架构
 
-`ai` 提供供应商无关契约和 DeepSeek 适配器；`runtime` 只通过模型和工具协议运行事件循环；`workspace`、`policy`、`sandbox`、`tools`、`sessions`、`tracing` 和 `memory` 是独立服务。`sandbox` 包含快照、Docker 执行器和补丁注册表；`agent.CodingAgent` 负责装配并提供稳定 Python API；`cli` 仅负责终端输入和输出。
+`ai` 提供供应商无关契约和 DeepSeek 适配器；`runtime` 只通过模型和工具协议运行事件循环；`workspace`、`policy`、`sandbox`、`tools`、`sessions`、`tracing` 和 `memory` 是独立服务。`sandbox` 包含快照、Docker 执行器和补丁注册表；`agent.CodingAgent` 负责装配并提供稳定 Python API；`cli` 和 `api` 仅负责输入输出、事件渲染和服务边界。
 
 连续聊天会话在内存中保留模型消息历史，每条用户消息产生一个新的运行 ID；会话 ID 保持不变。工具调用和工具结果会进入消息历史，以便模型在下一次提问中理解刚完成的操作。
 
