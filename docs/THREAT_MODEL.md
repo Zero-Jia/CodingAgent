@@ -94,13 +94,17 @@
 
 - 宿主机 `shell` 明确被 policy 拒绝。
 - `sandbox_shell` 和 `verify` 需要授权；非交互模式未授权时直接拒绝。
+- `PolicyEngine` 在沙箱命令进入 Docker 前运行 command risk detector。
+- 高置信危险命令会直接拒绝，即使已配置 `--allow-shell` 或计划已获批也不能绕过。
+- 可疑命令会强制要求交互式复核；非交互模式下直接拒绝。
 - 命令只在 Docker 沙箱中执行。
 - Docker 使用 `--network none`、只读根文件系统、非 root 用户、`no-new-privileges`、drop capabilities、PID/CPU/内存/tmpfs/ulimit 限制。
 - 沙箱通过 stdin 接收过滤后的 tar snapshot，不挂载宿主目录。
 
 剩余风险：
 
-- 当前没有 command risk detector。
+- command risk detector 是高置信规则集合，不是完整 shell 安全解析器。
+- 复杂 shell 语法、编码绕过和业务语义风险仍需要 Docker 隔离、patch 校验和人工审批兜底。
 - Docker 镜像尚未做 digest pinning、SBOM 或漏洞扫描。
 
 ### 沙箱逃逸假设
@@ -147,7 +151,6 @@
 以下能力属于路线图，当前不能对外声称已经实现：
 
 - GitHub Actions 以外的完整 CI/CD 质量门禁。
-- command risk detector。
 - RBAC、组织级 policy 和多租户隔离。
 - PostgreSQL 审计存储。
 - 远程沙箱执行器。

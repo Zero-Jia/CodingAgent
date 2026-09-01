@@ -182,6 +182,29 @@
 - 新增 plan 事件和 session summary 字段，记录计划状态、计划 ID、修订次数和最近失败。
 - `tests/test_plan_mode.py` 增加失败后阻塞、修订计划放行、缺少失败上下文拒绝等回归测试。
 
+### 9a. Sandbox Command Risk Detector
+
+状态：已完成。
+
+任务：
+
+在 `sandbox_shell` 和 `verify` 进入 Docker 前增加高置信命令风险检测。
+
+验收标准：
+
+- 明显危险命令在进入 Docker 沙箱前被拒绝。
+- `--allow-shell`、Plan Mode 计划批准和非交互预授权不能绕过危险命令拒绝。
+- 可疑命令要求交互式复核；非交互模式下拒绝。
+- 常见验证命令和定向清理命令不被误伤。
+- 覆盖复合命令、大小写和空白变化。
+
+完成记录：
+
+- 新增 `coding_agent.policy.command_risk`，包含命令风险等级、风险结果和 detector。
+- `PolicyEngine` 在 `sandbox_shell` 和 `verify` 授权判断前执行风险检测。
+- 高置信危险命令返回 `policy_denied`，可疑命令强制人工确认或在非交互模式拒绝。
+- 新增 `tests/test_command_risk.py`，并扩展 policy/runtime 回归测试。
+
 ## P2：企业平台能力
 
 ### 10. FastAPI 服务

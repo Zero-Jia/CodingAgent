@@ -254,6 +254,46 @@ async def test_runtime_returns_policy_denied_tool_result_to_model(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_runtime_blocks_dangerous_sandbox_command_before_tool_execution(
+    tmp_path: Path,
+) -> None:
+    shell = RecordingShellTool()
+    model = FakeModelAdapter(
+        [
+            [
+                ToolCallCompleted(
+                    call=ToolCall(
+                        id="call-1",
+                        name="sandbox_shell",
+                        arguments_json='{"command": "echo ok && rm -rf /"}',
+                    )
+                ),
+                Completed(),
+            ],
+            [TextDelta(text="blocked and continuing"), Completed()],
+        ]
+    )
+    runtime = _runtime(tmp_path, model, tools=[shell], allow_shell=True)
+    messages = [
+        ChatMessage(role="system", content="system"),
+        ChatMessage(role="user", content="run command"),
+    ]
+
+    events = await _collect(runtime, messages)
+
+    assert [event.type for event in events] == [
+        "run_started",
+        "tool_finished",
+        "message_delta",
+        "run_finished",
+    ]
+    assert events[1].payload["result"]["status"] == "policy_denied"
+    assert "dangerous sandbox command" in events[1].payload["result"]["summary"]
+    assert not shell.called
+    assert "policy_denied" in model.requests[1].messages[-1].content
+
+
+@pytest.mark.asyncio
 async def test_runtime_streams_text_before_tool_execution(tmp_path: Path) -> None:
     (tmp_path / "sample.txt").write_text("sample content\n", encoding="utf-8")
     model = FakeModelAdapter(

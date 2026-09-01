@@ -4,7 +4,7 @@
 
 ## 当前定位
 
-`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、Model Gateway 与 DeepSeek 模型适配器、事件驱动运行时、显式 Plan Mode、Docker 沙箱执行、基于 patch 的宿主机写回、JSONL 会话持久化、provider usage token 统计、脱敏 trace 存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
+`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、Model Gateway 与 DeepSeek 模型适配器、事件驱动运行时、显式 Plan Mode、Docker 沙箱执行、沙箱执行前 command risk detector、基于 patch 的宿主机写回、JSONL 会话持久化、provider usage token 统计、脱敏 trace 存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
 
 当前项目还不是完整企业级平台。它尚未实现 Web UI、FastAPI 服务、PostgreSQL、Milvus、Redis、MCP、Skills、Hooks、真实 memory 检索、模型辅助上下文摘要、多 agent 编排和 worktree 隔离。
 
@@ -173,16 +173,19 @@
 当前文件：
 
 - `engine.py`：允许只读工具，授权控制沙箱和 patch 操作，拒绝宿主机 shell，拒绝敏感路径。
+- `command_risk.py`：沙箱执行前的高置信命令风险检测器。
 
 当前状态：
 
 - 支持交互式审批和非交互模式拒绝。
 - 使用 `WorkspacePathPolicy` 做路径安全检查。
+- 在 `sandbox_shell` 和 `verify` 进入 Docker 前识别高置信危险命令并直接拒绝。
+- 对可疑命令强制交互式复核；非交互模式下拒绝。
 
 后续工作：
 
 - 增加可配置策略文件。
-- 增加命令风险检测。
+- 将命令风险规则升级为可配置规则并增加更细粒度风险分级。
 - 增加基于角色的权限策略。
 - 将 policy decision 写入数据库审计。
 

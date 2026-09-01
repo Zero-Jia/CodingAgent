@@ -42,6 +42,7 @@
 - Session 级 token usage 账本，支持 provider usage 累计统计、当前上下文 token、窗口占比和 compact 节省量展示。
 - 只读仓库工具：`read`、`search`、`git_diff`。
 - Docker 沙箱工具：`sandbox_shell` 和 `verify`。
+- 沙箱执行前 command risk detector：高置信危险命令直接拒绝，可疑命令强制交互式复核。
 - 通过 `apply_patch` 实现 patch-only 宿主机写回。
 - 工作区快照过滤，排除敏感文件、内部文件、符号链接、大文件、虚拟环境、缓存和 `.git`。
 - Patch 校验，覆盖敏感路径、二进制 patch、子模块、文件模式变化、符号链接、可执行权限变化、重命名、复制、changed-file 不一致和宿主并发修改。
@@ -71,6 +72,31 @@
 - coverage、pre-commit、release workflow、安全扫描和完整 CI/CD 发布流水线。
 
 ## 最近一次 Session
+
+本轮完成：
+
+- 参考 `D:\Software\MewCode` 的 `DangerousCommandDetector` 和权限分层思路，给当前项目增加沙箱执行前 command risk detector。
+- 新增 `coding_agent.policy.command_risk`，定义 `normal`、`suspicious`、`dangerous` 三类命令风险。
+- `PolicyEngine` 在 `sandbox_shell` 和 `verify` 授权判断前运行风险检测。
+- 高置信危险命令直接返回 `policy_denied`，即使配置了 `--allow-shell` 也不能绕过。
+- 可疑命令强制交互式复核；非交互模式下直接拒绝。
+- 覆盖 `rm -rf /`、`rm -rf .`、`rm -rf *`、`mkfs`、`dd of=/dev/*`、设备重定向、`chmod -R 777 /`、`chown -R ... /`、fork bomb、远程脚本管道执行、`git reset --hard`、`git clean -xdf` 和 `find . -delete` 等高置信风险。
+- 常见验证命令和定向清理命令保持不误伤，例如 `python -m pytest`、`uv run pytest`、`npm test`、`git diff` 和 `rm -rf build/`。
+- 新增 detector、policy 和 runtime 回归测试，确认危险命令不会进入工具执行，并会把 `policy_denied` 返回给模型继续下一轮。
+
+本轮修改文件：
+
+- `src/coding_agent/policy/command_risk.py`
+- `src/coding_agent/policy/engine.py`
+- `tests/test_command_risk.py`
+- `tests/test_policy_and_tools.py`
+- `tests/test_runtime.py`
+- `docs/ARCHITECTURE.md`
+- `docs/ROADMAP.md`
+- `docs/TASKS.md`
+- `docs/THREAT_MODEL.md`
+- `docs/SESSION_HANDOFF.md`
+- `docs/VERIFICATION.md`
 
 本轮完成：
 
@@ -131,13 +157,14 @@
 最近一次验证结果：
 
 - `uv --cache-dir .uv-cache run ruff check`：通过。
-- `uv --cache-dir .uv-cache run mypy`：通过，40 source files。
-- `uv --cache-dir .uv-cache run mypy src`：通过，40 source files。
+- `uv --cache-dir .uv-cache run mypy`：通过，41 source files。
+- `uv --cache-dir .uv-cache run mypy src`：通过，41 source files。
+- `uv --cache-dir .uv-cache run pytest tests/test_command_risk.py tests/test_policy_and_tools.py tests/test_runtime.py --basetemp .codex-test-tmp-risk -p no:cacheprovider`：42 passed。
 - `uv --cache-dir .uv-cache run pytest tests/test_sandbox.py --basetemp .codex-test-tmp-security -p no:cacheprovider`：14 passed，1 skipped。
 - `uv --cache-dir .uv-cache run pytest tests/test_plan_mode.py --basetemp .codex-test-tmp-plan-recovery-3 -p no:cacheprovider`：10 passed。
 - 当前仓库 `SnapshotService` smoke test：确认 `src/coding_agent/runtime/token_usage.py` 和 `tests/test_plan_mode.py` 均进入 snapshot。
 - 实际 Docker sandbox smoke test：`test -f src/coding_agent/runtime/token_usage.py && python -m pytest tests/test_plan_mode.py -q`，success，exit code 0，6 passed。
-- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-plan-recovery-final2 -p no:cacheprovider`：56 passed，1 skipped。
+- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-risk-final2 -p no:cacheprovider`：88 passed，1 skipped。
 
 注意事项：
 
@@ -154,19 +181,19 @@
 
 建议下一轮任务：
 
-从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若继续按 P1 Runtime 成熟化推进，建议做 `CLI slash command registry` 或 `sandbox 执行前的 command risk detector`；若优先补工程化，也可以先增加 coverage 或 pre-commit。
+从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若严格按当前最高优先级推进，建议做 P2 `FastAPI 服务` 的最小 API/SSE 入口；若继续补 P1 交互体验，可以先做 `CLI slash command registry`。若优先补工程化，也可以先增加 coverage 或 pre-commit。
 
 建议 prompt：
 
 ```text
-本轮只做 sandbox 执行前的 command risk detector，不重构无关模块。请在 PolicyEngine 或独立 risk detector 中识别明显危险命令，增加确定性测试，完成后运行 ruff、mypy、pytest，并更新 docs/SESSION_HANDOFF.md 和 docs/VERIFICATION.md。
+本轮只做 FastAPI 服务的最小入口，不重构 runtime。请基于现有 CodingAgent API 增加创建 session、发送消息、流式事件和取消 run 的接口，增加 mock model 测试，完成后运行 ruff、mypy、pytest，并更新 docs/SESSION_HANDOFF.md 和 docs/VERIFICATION.md。
 ```
 
 验收标准：
 
-- 明显危险命令在进入 Docker 沙箱前被拒绝或要求更高等级审批。
-- 只读验证命令不受误伤。
-- 复合命令、大小写和空白变化有测试覆盖。
+- CLI 和 API 复用同一套 `CodingAgent` runtime。
+- API 可以创建 session、发送消息、流式返回事件并取消 run。
+- 自动化测试不依赖真实 DeepSeek API。
 - 现有安全边界不变。
 - `uv --cache-dir .uv-cache run ruff check`、`uv --cache-dir .uv-cache run mypy`、`uv --cache-dir .uv-cache run mypy src` 和 `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider` 通过。
 

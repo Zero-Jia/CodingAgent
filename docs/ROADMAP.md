@@ -16,6 +16,7 @@
 - 确定性 context manager，支持 token 预算触发、自动 compact、近期尾部保留和 tool call/result 边界保护。
 - Session 级 token usage 账本，基于 provider usage 统计累计消耗，并在 CLI 中显示当前上下文 token 和窗口占比。
 - 显式 Plan Mode，要求模型在使用沙箱或 patch 工具前先提交计划并获批。
+- 沙箱执行前 command risk detector，高置信危险命令直接拒绝，可疑命令强制交互复核。
 - `read`、`search`、`git_diff` 只读工具。
 - Docker 无网络沙箱命令工具。
 - 单独的 `verify` 工具，沙箱变更会被丢弃。
@@ -82,7 +83,7 @@
 - 增加模型辅助 compact summary。
 - 增加工具输出摘要策略。
 - 增加 CLI slash command registry。
-- 增加 sandbox 执行前的 command risk detector。
+- 已完成：增加 sandbox 执行前的 command risk detector。
 
 验收标准：
 

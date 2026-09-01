@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from coding_agent.policy.command_risk import CommandRiskDetector
 from coding_agent.workspace.security import WorkspacePathPolicy
 
 Decision = Literal["allow", "deny", "require_approval"]
@@ -23,6 +24,7 @@ class PolicyEngine:
     ) -> None:
         self.workspace = workspace.resolve()
         self.paths = WorkspacePathPolicy(self.workspace)
+        self.command_risk = CommandRiskDetector()
         self.allow_write = allow_write
         self.allow_shell = allow_shell
         self.non_interactive = non_interactive
@@ -48,6 +50,19 @@ class PolicyEngine:
             command = params.get("command")
             if not isinstance(command, str):
                 return PolicyDecision("deny", "tool command must be a string")
+            risk = self.command_risk.evaluate(command)
+            if risk.level == "dangerous":
+                return PolicyDecision("deny", f"dangerous sandbox command refused: {risk.reason}")
+            if risk.level == "suspicious":
+                if self.non_interactive:
+                    return PolicyDecision(
+                        "deny",
+                        f"suspicious sandbox command requires interactive approval: {risk.reason}",
+                    )
+                return PolicyDecision(
+                    "require_approval",
+                    f"suspicious sandbox command requires review: {risk.reason}",
+                )
             return self._authorization("sandbox operation", self.allow_shell)
         if tool_name == "apply_patch":
             patch_id = params.get("patch_id")
