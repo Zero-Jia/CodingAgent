@@ -4,9 +4,9 @@
 
 ## 当前定位
 
-`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、最小 FastAPI/SSE 服务入口、Model Gateway 与 DeepSeek 模型适配器、事件驱动运行时、显式 Plan Mode、Docker 沙箱执行、沙箱执行前 command risk detector、基于 patch 的宿主机写回、JSONL 会话持久化、provider usage token 统计、脱敏 trace 存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
+`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、最小 FastAPI/SSE 服务入口、Model Gateway 与 DeepSeek 模型适配器、事件驱动运行时、显式 Plan Mode、Docker 沙箱执行、沙箱执行前 command risk detector、基于 patch 的宿主机写回、JSONL 会话持久化、可选 SQLAlchemy/PostgreSQL 会话存储底座、provider usage token 统计、脱敏 trace 存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
 
-当前项目还不是完整企业级平台。它尚未实现 Web UI、认证授权、持久化审批队列、PostgreSQL、Milvus、Redis、MCP、Skills、Hooks、真实 memory 检索、模型辅助上下文摘要、多 agent 编排和 worktree 隔离。
+当前项目还不是完整企业级平台。它尚未实现 Web UI、认证授权、持久化审批队列、数据库存储运行时配置切换、Milvus、Redis、MCP、Skills、Hooks、真实 memory 检索、模型辅助上下文摘要、多 agent 编排和 worktree 隔离。
 
 ## 核心设计原则
 
@@ -218,6 +218,7 @@
 当前文件：
 
 - `store.py`：JSONL session events、checkpoints、summaries、transcripts。
+- `postgres.py`：SQLAlchemy-backed session store，用于 PostgreSQL 部署和 repository contract tests。
 - `lock.py`：会话锁，防止同一 chat session 被并发写入。
 
 当前状态：
@@ -226,13 +227,13 @@
 - 保存脱敏 checkpoint。
 - 保存人类可读 transcript。
 - 保存会话摘要，包括运行次数、工具次数、provider usage 累计 token、当前上下文 token、上下文窗口占比和最近 compact 节省量。
+- `PostgresSessionStore` 实现与 JSONL store 相同的核心协议，事件、checkpoint、summary 和 transcript 行为有合同测试覆盖。
 
 后续工作：
 
-- 增加 PostgreSQL 实现。
-- 增加数据库 migration。
 - 将 run、turn、event 规范化存储。
 - 增加多用户归属。
+- 将 CLI/API 的 storage backend 选择配置化。
 
 ### `coding_agent.tracing`
 
@@ -325,6 +326,28 @@
 - 增加 Web 审批接口和持久化 approval queue。
 - 增加 WebSocket 事件流或保留 SSE 作为稳定协议。
 - 将 active run、审批和会话锁迁移到 Redis/PostgreSQL。
+
+### `coding_agent.db`
+
+职责：平台化关系数据库 schema 和初始化工具。
+
+当前文件：
+
+- `tables.py`：SQLAlchemy Core 表定义，覆盖 sessions、runs、session_events、checkpoints、transcripts、approvals、artifacts 和 model_usage。
+- `engine.py`：数据库 engine 创建和 schema 初始化工具。
+- `migrations/versions/0001_create_platform_storage.py`：Alembic 初始迁移。
+
+当前状态：
+
+- PostgreSQL 是目标生产数据库，合同测试使用 SQLite 执行同一套 SQLAlchemy schema 和 repository 行为。
+- JSONL 仍是 CLI/API 默认本地模式。
+- 表结构已为后续 run 状态追踪、持久化审批队列、artifact 审计和 model usage 看板预留基础字段。
+
+后续工作：
+
+- 增加运行时配置入口，在本地 JSONL 和 PostgreSQL store 之间切换。
+- 增加 turns、tool_calls、patches 和 audit_logs 的更细粒度规范化表。
+- 增加 PostgreSQL 连接池、健康检查、迁移执行文档和部署配置。
 
 ### `coding_agent.cli`
 

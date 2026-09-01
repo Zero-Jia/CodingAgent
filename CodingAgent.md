@@ -2,7 +2,7 @@
 
 本文档描述的是以当前 `CodingAgent` 项目为基础，参考 `D:\Software\MewCode` 的完整 agent 运行时能力，并按照企业级 coding agent 的工程标准继续演进后的目标形态。
 
-当前项目已经具备一个安全优先的本地 coding agent 内核：Python 包结构清晰，支持 DeepSeek 模型调用、事件驱动运行时、只读工具、Docker 无网络沙箱、补丁注册与审批回写、JSONL 会话与追踪存储、脱敏 artifact、基础测试和严格类型检查。后续完整形态不是简单扩展一个 CLI 工具，而是将其升级为一个可审计、可扩展、可部署、支持团队协作和多模型接入的企业级 agent 平台。
+当前项目已经具备一个安全优先的本地 coding agent 内核：Python 包结构清晰，支持 DeepSeek 模型调用、事件驱动运行时、只读工具、Docker 无网络沙箱、补丁注册与审批回写、JSONL 会话与追踪存储、SQLAlchemy/PostgreSQL 会话存储底座、脱敏 artifact、基础测试和严格类型检查。后续完整形态不是简单扩展一个 CLI 工具，而是将其升级为一个可审计、可扩展、可部署、支持团队协作和多模型接入的企业级 agent 平台。
 
 ## 1. 项目整体定位
 
@@ -33,7 +33,8 @@
 - `sandbox`：Docker 沙箱契约、快照生成、一次性容器执行、patch 注册和校验。
 - `policy`：工具权限、路径边界、写入审批和 shell 审批。
 - `workspace`：工作区检查、文件搜索、敏感路径过滤。
-- `sessions`：JSONL 会话事件、checkpoint、transcript、会话索引和独占锁。
+- `sessions`：JSONL 会话事件、checkpoint、transcript、会话索引、PostgreSQL store 和独占锁。
+- `db`：SQLAlchemy Core schema、engine helper 和 Alembic migration。
 - `tracing`：结构化 trace、artifact、应用日志和脱敏。
 - `memory`：记忆协议预留，目前是 Noop 实现。
 - `evals`：最小评测场景和报告结构。
@@ -189,7 +190,7 @@ tool call/result 配对保护。CLI 已能基于 provider usage 显示 session �
 
 ### 4.8 数据层不足
 
-当前使用本地 JSONL 文件，适合 MVP，不适合多用户企业部署。最终需要：
+当前默认使用本地 JSONL 文件，适合 MVP；项目已提供 SQLAlchemy/PostgreSQL 会话存储底座和 Alembic 初始迁移，但还缺少运行时配置切换、连接池部署约定和完整审计数据模型。最终需要：
 
 - PostgreSQL 存储结构化业务数据
 - Milvus 存储代码和记忆向量
@@ -769,7 +770,7 @@ Redis 中建议保存：
 
 - FastAPI 服务。
 - WebSocket/SSE 事件流。
-- PostgreSQL 数据层。
+- PostgreSQL 运行时接入和数据层扩展。
 - Redis 任务队列和锁。
 - Web 审批页。
 - MCP 工具接入。
@@ -892,7 +893,7 @@ src/coding_agent/
 
 `CodingAgent` 的最终形态不是一个简单的“命令行套壳大模型”，而是一个围绕安全执行、受控写回、上下文管理、可观测性、插件生态和多 agent 协作构建的工程系统。
 
-当前项目已经有了最重要的底座：安全沙箱和补丁审批。后续最应该优先补的是工程化质量门禁、多 provider、上下文压缩、真实 memory、MCP/Skills/Hooks、PostgreSQL/Milvus 数据层、Web 审批和多 agent worktree 隔离。
+当前项目已经有了最重要的底座：安全沙箱、补丁审批和基础数据库存储。后续最应该优先补的是工程化质量门禁、多 provider、上下文压缩、真实 memory、MCP/Skills/Hooks、PostgreSQL 运行时接入、Milvus 数据层、Web 审批和多 agent worktree 隔离。
 
 如果用于秋招面试，建议把项目主线讲成：
 

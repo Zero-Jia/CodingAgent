@@ -113,13 +113,15 @@ API 层只封装 `CodingAgent` 和 `ChatSession`，不复制 agent loop，也不
 - `artifacts/<session_id>/<run_id>/`：可选的脱敏产物
 - `logs/application.jsonl`：应用诊断日志
 
+项目还提供可选的 SQLAlchemy/PostgreSQL 会话存储底座：`coding_agent.db` 定义 sessions、runs、session events、checkpoints、transcripts、approvals、artifacts 和 model usage 表，`coding_agent.sessions.PostgresSessionStore` 实现与 JSONL store 相同的核心协议，`migrations/` 提供 Alembic 初始迁移。当前 CLI/API 默认仍使用 `.coding-agent/` JSONL 本地模式；生产化数据库配置切换、分布式锁和持久化审批队列属于后续任务。
+
 终端默认只显示 Agent 的最终回答、审批和失败/取消提示；工具完整输出不会直接显示。API 密钥、Authorization 头、密码/令牌字段和可识别的密钥赋值都会被脱敏。
 
 应用启动、会话恢复、运行开始和完成会写入 `logs/application.jsonl`。每次有文本输出的工具调用都会将脱敏全文保存到 `artifacts/<session_id>/<run_id>/`；trace、transcript、session 事件和 checkpoint 仅记录摘要、字符数与 artifact 相对路径。待回写补丁不会持久化到这些目录。
 
 ## 扩展路线
 
-`CodingAgent` 是 FastAPI 和未来 UI 的入口，因此两者无需复制运行循环。`SessionStore`、`TraceStore`、`ArtifactStore` 与 `MemoryStore` 是稳定协议。未来 MySQL 后端可映射为 `sessions`、`runs`、`events` 和 `artifacts` 表，而不改动运行时；`MemoryRecord` 已为后续经人工审核的记忆检索实现预留接口。下一阶段可将 Docker CLI 执行器替换为远程隔离运行时，或为补丁引入持久化的人工审批队列；多 Agent、Web/TUI/IDE 客户端和真实 MySQL 尚未实现。
+`CodingAgent` 是 FastAPI 和未来 UI 的入口，因此两者无需复制运行循环。`SessionStore`、`TraceStore`、`ArtifactStore` 与 `MemoryStore` 是稳定协议。当前已提供 PostgreSQL 会话存储实现和 Alembic 迁移，但运行时默认存储选择仍需继续配置化；`MemoryRecord` 已为后续经人工审核的记忆检索实现预留接口。下一阶段可将 Docker CLI 执行器替换为远程隔离运行时，或为补丁引入持久化的人工审批队列；多 Agent、Web/TUI/IDE 客户端、Milvus 和 Redis 尚未实现。
 
 ## 评测
 

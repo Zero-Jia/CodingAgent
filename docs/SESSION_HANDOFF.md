@@ -48,6 +48,7 @@
 - 工作区快照过滤，排除敏感文件、内部文件、符号链接、大文件、虚拟环境、缓存和 `.git`。
 - Patch 校验，覆盖敏感路径、二进制 patch、子模块、文件模式变化、符号链接、可执行权限变化、重命名、复制、changed-file 不一致和宿主并发修改。
 - JSONL session、checkpoint、transcript、summary、trace、artifact 和 application log。
+- SQLAlchemy/PostgreSQL 会话存储底座和 Alembic 初始迁移。
 - 连续 chat session 的独占锁。
 - `src/coding_agent/py.typed` 包类型标记。
 - GitHub Actions 最小 CI workflow，运行 ruff、mypy 和 pytest。
@@ -61,7 +62,7 @@
 - Web UI。
 - 认证授权。
 - 持久化审批队列。
-- PostgreSQL。
+- PostgreSQL 运行时配置切换和生产部署配置。
 - Milvus。
 - Redis。
 - MCP。
@@ -76,6 +77,57 @@
 ## 最近一次 Session
 
 本轮完成：
+
+- 完成 P2 `PostgreSQL 存储` 的最小平台数据层。
+- 新增 `coding_agent.db`，用 SQLAlchemy Core 定义 sessions、runs、session_events、checkpoints、transcripts、approvals、artifacts 和 model_usage 表。
+- 新增 `PostgresSessionStore`，实现 `SessionStore` 的事件追加/读取、checkpoint 保存/恢复、summary 保存/列表和 transcript 追加。
+- 新增 Alembic 初始迁移 `0001_create_platform_storage`，可创建 PostgreSQL 目标 schema；合同测试中使用 SQLite 验证迁移结构。
+- JSONL 仍作为 CLI/API 默认本地模式保留；本轮没有改变 `CodingAgent` 默认装配路径。
+- 新增 repository contract tests，让 JSONL 和 SQLAlchemy store 共用核心行为测试，并覆盖 summary 更新不得因外键级联删除事件和 checkpoint。
+- 参考 `D:\Software\MewCode` 的 session record/meta 分离、JSONL 容错和 resume/delete 测试思路；未照搬其本地直写模型。
+- `pyproject.toml` 和 `uv.lock` 增加 SQLAlchemy、Alembic 和 psycopg 依赖。
+
+本轮修改文件：
+
+- `README.md`
+- `CodingAgent.md`
+- `pyproject.toml`
+- `uv.lock`
+- `alembic.ini`
+- `migrations/env.py`
+- `migrations/versions/0001_create_platform_storage.py`
+- `src/coding_agent/db/__init__.py`
+- `src/coding_agent/db/engine.py`
+- `src/coding_agent/db/tables.py`
+- `src/coding_agent/sessions/__init__.py`
+- `src/coding_agent/sessions/postgres.py`
+- `src/coding_agent/sessions/store.py`
+- `tests/test_session_store_contract.py`
+- `docs/ARCHITECTURE.md`
+- `docs/ROADMAP.md`
+- `docs/TASKS.md`
+- `docs/SESSION_HANDOFF.md`
+- `docs/VERIFICATION.md`
+
+本轮验证结果：
+
+- `uv --cache-dir .uv-cache add "sqlalchemy==2.0.43" "alembic==1.16.5" "psycopg[binary]==3.2.9"`：通过；初次受限网络运行失败后，经授权重试成功。
+- `uv --cache-dir .uv-cache run ruff check`：通过。
+- `uv --cache-dir .uv-cache run mypy`：通过，47 source files。
+- `uv --cache-dir .uv-cache run mypy src`：通过，47 source files。
+- `uv --cache-dir .uv-cache run mypy src tests/test_session_store_contract.py`：通过，48 source files。
+- `uv --cache-dir .uv-cache run pytest tests/test_session_store_contract.py --basetemp .codex-test-tmp-postgres-targeted-2 -p no:cacheprovider`：6 passed。
+- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-postgres-final2 -p no:cacheprovider`：101 passed，1 skipped。
+
+本轮未完成事项：
+
+- 未将 CLI/API 默认 store 切换为 PostgreSQL；仍需后续增加配置入口和运行时装配。
+- 未实现 Redis 分布式锁、active run registry 或 pub/sub。
+- 未实现持久化 approval queue、Web 审批接口或 patch 审批页面。
+- PostgreSQL schema 目前是平台存储底座；turns、tool_calls、patches、audit_logs 和多用户/多租户归属仍待规范化扩展。
+- 未启动真实 PostgreSQL 实例做端到端连接测试；本轮使用 SQLAlchemy contract tests 和 Alembic SQLite migration 测试验证结构和行为。
+
+上轮完成：
 
 - 参考 `D:\Software\MewCode` 的 remote WebSocket 事件桥接、浏览器 UI 事件消费和 background task cancel 思路，给当前项目增加最小 FastAPI/SSE 服务入口。
 - 新增 `coding_agent.api.app`，提供 `create_app()` factory、`ApiSessionManager`、会话/run 内存索引、SSE 序列化和取消入口。
@@ -227,19 +279,19 @@
 
 建议下一轮任务：
 
-从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若严格按当前最高优先级推进，建议做 P2 `PostgreSQL 存储` 的最小 repository/schema/migration；如果想先让 API 更可用，也可以做 `审批 UI/API` 的最小 Web patch 审批流程。若优先补工程化，可以先增加 coverage 或 pre-commit。
+从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若严格按当前最高优先级推进，建议做 P2 `审批 UI` 的最小 Web patch 审批流程；如果想先稳住服务化基础，也可以先做 PostgreSQL store 的 CLI/API 配置切换和部署文档。若优先补工程化，可以先增加 coverage 或 pre-commit。
 
 建议 prompt：
 
 ```text
-本轮只做 PostgreSQL 存储的最小入口，不重构 runtime。请在现有 store protocol 后面增加 PostgreSQL schema、SQLAlchemy repository 和 Alembic migration，并保留 JSONL 本地模式。增加 repository contract tests，完成后运行 ruff、mypy、pytest，并更新 docs/SESSION_HANDOFF.md 和 docs/VERIFICATION.md。
+本轮只做审批 UI/API 的最小入口，不重构 runtime。请在现有 patch approval 链路后面增加可审查的 Web 审批流程，展示 changed files 和脱敏 diff preview，支持 approve/reject，并写入 audit record。完成后运行 ruff、mypy、pytest，并更新 docs/SESSION_HANDOFF.md 和 docs/VERIFICATION.md。
 ```
 
 验收标准：
 
-- JSONL 仍可作为本地开发模式。
-- PostgreSQL repository 与 JSONL store 的核心行为通过 contract tests。
-- migration 可创建 sessions、runs、events、approvals、artifacts 和 model usage 的基础表。
+- 展示 changed files 和脱敏 diff preview。
+- 支持 approve 和 reject。
+- 审批结果有 audit record。
 - 自动化测试不依赖真实 DeepSeek API。
 - `uv --cache-dir .uv-cache run ruff check`、`uv --cache-dir .uv-cache run mypy`、`uv --cache-dir .uv-cache run mypy src` 和 `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider` 通过。
 

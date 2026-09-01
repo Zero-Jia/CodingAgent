@@ -32,17 +32,18 @@ uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovid
 
 结果：
 
-锁文件更新：
+依赖更新：
 
 ```text
-uv --cache-dir .uv-cache lock
-Resolved 32 packages in 3.34s
-Added fastapi v0.116.1
-Added starlette v0.47.3
-Added uvicorn v0.35.0
+uv --cache-dir .uv-cache add "sqlalchemy==2.0.43" "alembic==1.16.5" "psycopg[binary]==3.2.9"
+Resolved 40 packages in 2.59s
+Installed alembic v1.16.5
+Installed psycopg v3.2.9
+Installed psycopg-binary v3.2.9
+Installed sqlalchemy v2.0.43
 ```
 
-初次在受限网络沙箱中运行 `uv --cache-dir .uv-cache lock` 失败，错误为访问 PyPI socket 被拒绝；经授权后成功。
+初次在受限网络沙箱中运行依赖更新失败，错误为无法访问 PyPI；经授权后成功。
 
 ```text
 uv --cache-dir .uv-cache run ruff check
@@ -51,31 +52,41 @@ All checks passed!
 
 ```text
 uv --cache-dir .uv-cache run mypy
-Success: no issues found in 43 source files
+Success: no issues found in 47 source files
 ```
 
 ```text
 uv --cache-dir .uv-cache run mypy src
-Success: no issues found in 43 source files
+Success: no issues found in 47 source files
 ```
 
-定向 API 测试：
+```text
+uv --cache-dir .uv-cache run mypy src tests/test_session_store_contract.py
+Success: no issues found in 48 source files
+```
+
+定向 PostgreSQL/session store 测试：
 
 ```text
-uv --cache-dir .uv-cache run pytest tests/test_api.py --basetemp .codex-test-tmp-api -p no:cacheprovider
-7 passed
+uv --cache-dir .uv-cache run pytest tests/test_session_store_contract.py --basetemp .codex-test-tmp-postgres-targeted-2 -p no:cacheprovider
+6 passed
 ```
 
 全量测试：
 
 ```text
-uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-fastapi-final -p no:cacheprovider
-95 passed, 1 skipped
+uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-postgres-final2 -p no:cacheprovider
+101 passed, 1 skipped
 ```
 
-本轮新增 FastAPI/SSE 服务入口后，自动化测试仍不依赖真实 DeepSeek API，也不启动 Docker。
+本轮新增 PostgreSQL/SQLAlchemy 会话存储和 Alembic 初始迁移后，自动化测试仍不依赖真实 DeepSeek API，也不启动 Docker 或真实 PostgreSQL 服务。迁移测试使用 SQLite 验证表结构，repository contract tests 同时覆盖 JSONL 和 SQLAlchemy store。
 
 历史验证摘要：
+
+```text
+uv --cache-dir .uv-cache run pytest tests/test_api.py --basetemp .codex-test-tmp-api -p no:cacheprovider
+7 passed
+```
 
 ```text
 uv --cache-dir .uv-cache run pytest tests/test_command_risk.py tests/test_policy_and_tools.py tests/test_runtime.py --basetemp .codex-test-tmp-risk -p no:cacheprovider

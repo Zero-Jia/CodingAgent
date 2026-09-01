@@ -24,6 +24,7 @@
 - 基于 `apply_patch` 的宿主机写回。
 - 工作区敏感路径过滤。
 - JSONL session、checkpoint、transcript、trace、artifact 和 application log。
+- SQLAlchemy/PostgreSQL 会话存储底座和 Alembic 初始迁移。
 - 最小 eval report 契约。
 - 面向 runtime、policy、tools、sandbox、patch validation 和 sessions 的基础测试。
 - `ruff`、`mypy`、`pytest` 配置。
@@ -34,7 +35,7 @@
 当前尚未实现：
 
 - Web UI、认证授权、持久化审批队列。
-- PostgreSQL、Milvus、Redis。
+- PostgreSQL 运行时配置切换、Milvus、Redis。
 - MCP。
 - Skills。
 - Hooks。
@@ -101,9 +102,11 @@
 
 - 已完成：基于现有 `CodingAgent` API 增加最小 FastAPI app。
 - 已完成：增加 SSE 事件流。
-- 增加 PostgreSQL schema，覆盖 sessions、runs、turns、events、tools、approvals、patches、artifacts、model usage 和 audit logs。
-- 增加 SQLAlchemy repository。
-- 增加 Alembic migration。
+- 已完成：增加 PostgreSQL/SQLAlchemy 基础 schema，覆盖 sessions、runs、events、checkpoints、transcripts、approvals、artifacts 和 model usage。
+- 已完成：增加 SQLAlchemy repository，当前实现 `SessionStore` 核心协议。
+- 已完成：增加 Alembic 初始 migration。
+- 增加 PostgreSQL 运行时配置切换和生产连接池设置。
+- 增加更细粒度 turns、tools、patches 和 audit logs schema。
 - 增加 Redis，用于 task state、locks 和 pub/sub。
 - 增加持久化 approval queue。
 - 增加最小 Web patch 审批页面。

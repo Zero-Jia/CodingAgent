@@ -94,7 +94,7 @@ class JsonlSessionStore:
 
     async def save_checkpoint(self, checkpoint: ConversationCheckpoint) -> None:
         path = self.root / "checkpoints" / f"{checkpoint.session_id}.json"
-        persisted = _redacted_checkpoint(checkpoint)
+        persisted = redacted_checkpoint(checkpoint)
         persisted.updated_at = datetime.now(UTC)
         await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
         await asyncio.to_thread(_atomic_write, path, persisted.model_dump_json(indent=2))
@@ -173,7 +173,8 @@ def _load_summaries(path: Path) -> list[SessionSummary]:
         return []
 
 
-def _redacted_checkpoint(checkpoint: ConversationCheckpoint) -> ConversationCheckpoint:
+def redacted_checkpoint(checkpoint: ConversationCheckpoint) -> ConversationCheckpoint:
+    """Return the persisted checkpoint form with secrets and large tool output removed."""
     messages: list[ChatMessage] = []
     for message in checkpoint.messages:
         content = _checkpoint_content(message)

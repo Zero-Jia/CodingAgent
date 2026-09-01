@@ -235,7 +235,7 @@
 
 ### 11. PostgreSQL 存储
 
-状态：未开始。
+状态：已完成。
 
 任务：
 
@@ -247,6 +247,14 @@
 - 存在 Alembic migrations。
 - JSONL 仍可作为本地模式使用。
 - JSONL 和 PostgreSQL store 都通过 repository contract tests。
+
+完成记录：
+
+- 新增 `coding_agent.db`，用 SQLAlchemy Core 定义平台存储基础表，覆盖 sessions、runs、events、approvals、artifacts 和 model usage 等本轮验收对象。
+- 新增 `PostgresSessionStore`，实现 `SessionStore` 的事件、checkpoint、summary 和 transcript 核心行为。
+- 新增 Alembic 初始迁移 `0001_create_platform_storage`，创建 sessions、session_events、checkpoints、transcripts、approvals、artifacts 和 model_usage 表。
+- 新增 `tests/test_session_store_contract.py`，让 JSONL 与 SQLAlchemy store 共同通过 repository contract tests，并覆盖 summary 更新不得级联删除事件和 checkpoint。
+- JSONL 仍是当前 CLI/API 默认本地模式；PostgreSQL 运行时配置切换、分布式锁、持久化 approval queue 和更细粒度 runs/turns/tools/patches/audit logs 属于后续任务。
 
 ### 12. 审批 UI
 
