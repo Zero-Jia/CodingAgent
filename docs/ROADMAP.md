@@ -109,7 +109,7 @@
 - 增加更细粒度 turns、tools、patches 和 audit logs schema。
 - 增加 Redis，用于 task state、locks 和 pub/sub。
 - 增加持久化 approval queue。
-- 增加最小 Web patch 审批页面。
+- 已完成：增加最小本地 Web patch 审批页面和 approve/reject API；当前审批队列仍是进程内状态，审计写入本地 JSONL。
 
 验收标准：
 
@@ -117,7 +117,8 @@
 - API 可以创建 session、发送消息、流式返回事件并取消活跃 run。
 - JSONL 仍可作为本地开发模式。
 - PostgreSQL 实现通过 repository contract tests。
-- 审批状态在进程重启后仍然存在。
+- 本地最小审批 UI 可以展示 changed files、脱敏 diff preview，并支持 approve/reject。
+- 持久化 approval queue 完成后，审批状态在进程重启后仍然存在。
 
 ## Phase 4：知识检索和记忆
 

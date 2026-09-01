@@ -91,8 +91,10 @@ DeepSeek 适配器使用兼容 OpenAI 的 Chat Completions SSE 协议。所有 A
 - `GET /v1/sessions/{session_id}`：读取单个会话摘要。
 - `POST /v1/sessions/{session_id}/messages/stream`：发送消息并以 Server-Sent Events 返回 `AgentEvent`。
 - `POST /v1/runs/{run_id}/cancel` 和 `POST /v1/sessions/{session_id}/cancel`：取消活跃运行。
+- `GET /approvals/ui`：打开本地最小审批页面，查看并处理待审批操作。
+- `GET /approvals`、`GET /approvals/{approval_id}`、`POST /approvals/{approval_id}/approve`、`POST /approvals/{approval_id}/reject`：列出、查看、批准或拒绝当前 API 进程内的待审批操作。
 
-API 层只封装 `CodingAgent` 和 `ChatSession`，不复制 agent loop，也不新增宿主机写入或宿主机 shell 能力。服务进程会复用现有 session lock，避免与 CLI 或另一个 API 进程同时写入同一会话。当前尚未实现 Web UI、认证、持久化审批队列和多进程分布式锁；生产部署前需要补齐这些能力。
+API 层只封装 `CodingAgent` 和 `ChatSession`，不复制 agent loop，也不新增宿主机写入或宿主机 shell 能力。服务进程会复用现有 session lock，避免与 CLI 或另一个 API 进程同时写入同一会话。API 的审批页面目前是本地最小实现：待审批项保存在当前进程内，审批审计以脱敏 JSONL 写入 `.coding-agent/approvals/audit.jsonl`。当前尚未实现认证、持久化审批队列、多进程分布式锁和生产级 Web UI；生产部署前需要补齐这些能力，并且服务应只绑定可信本地地址或受认证代理保护。
 
 ## 架构
 
@@ -111,6 +113,7 @@ API 层只封装 `CodingAgent` 和 `ChatSession`，不复制 agent loop，也不
 - `locks/<session_id>.lock`：连续会话的独占锁
 - `traces/<session_id>/<run_id>.jsonl`：关联运行过程的结构化追踪
 - `artifacts/<session_id>/<run_id>/`：可选的脱敏产物
+- `approvals/audit.jsonl`：本地 API 审批请求和决议的脱敏审计记录
 - `logs/application.jsonl`：应用诊断日志
 
 项目还提供可选的 SQLAlchemy/PostgreSQL 会话存储底座：`coding_agent.db` 定义 sessions、runs、session events、checkpoints、transcripts、approvals、artifacts 和 model usage 表，`coding_agent.sessions.PostgresSessionStore` 实现与 JSONL store 相同的核心协议，`migrations/` 提供 Alembic 初始迁移。当前 CLI/API 默认仍使用 `.coding-agent/` JSONL 本地模式；生产化数据库配置切换、分布式锁和持久化审批队列属于后续任务。

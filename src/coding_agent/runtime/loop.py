@@ -46,7 +46,15 @@ from coding_agent.tracing.store import TraceEvent, TraceStore, output_summary
 
 
 class ApprovalProvider(Protocol):
-    async def request(self, tool_name: str, reason: str, params: dict[str, object]) -> bool: ...
+    async def request(
+        self,
+        tool_name: str,
+        reason: str,
+        params: dict[str, object],
+        *,
+        session_id: str = "",
+        run_id: str = "",
+    ) -> bool: ...
 
 
 class ArtifactWriter(Protocol):
@@ -54,7 +62,15 @@ class ArtifactWriter(Protocol):
 
 
 class DenyApproval:
-    async def request(self, tool_name: str, reason: str, params: dict[str, object]) -> bool:
+    async def request(
+        self,
+        tool_name: str,
+        reason: str,
+        params: dict[str, object],
+        *,
+        session_id: str = "",
+        run_id: str = "",
+    ) -> bool:
         return False
 
 
@@ -323,7 +339,13 @@ class AgentRuntime:
                     "details": plan_details,
                 },
             )
-            allowed = await self.approval.request(call.name, plan_reason, plan_details)
+            allowed = await self.approval.request(
+                call.name,
+                plan_reason,
+                plan_details,
+                session_id=session_id,
+                run_id=run_id,
+            )
             yield ApprovalResolved(
                 session_id=session_id,
                 run_id=run_id,
@@ -355,7 +377,13 @@ class AgentRuntime:
                 run_id=run_id,
                 payload={"tool": call.name, "reason": decision.reason, "details": approval_params},
             )
-            allowed = await self.approval.request(call.name, decision.reason, approval_params)
+            allowed = await self.approval.request(
+                call.name,
+                decision.reason,
+                approval_params,
+                session_id=session_id,
+                run_id=run_id,
+            )
             yield ApprovalResolved(
                 session_id=session_id,
                 run_id=run_id,

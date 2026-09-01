@@ -39,6 +39,7 @@
 - 供应商无关的模型、消息、工具调用、usage 和事件契约。
 - 事件驱动 runtime，支持工具执行、审批流、取消、trace 写入和 artifact 写入。
 - 显式 Plan Mode，支持 `--plan`，要求模型在使用沙箱或 patch 工具前先提交计划并获批。
+- API 本地最小 Web 审批入口，支持查看 pending approval、approve/reject 和脱敏 JSONL 审计。
 - 确定性 context manager，支持 token 预算触发、自动 compact、近期尾部保留和 tool call/result 边界保护。
 - Session 级 token usage 账本，支持 provider usage 累计统计、当前上下文 token、窗口占比和 compact 节省量展示。
 - 只读仓库工具：`read`、`search`、`git_diff`。
@@ -59,9 +60,9 @@
 
 尚未实现：
 
-- Web UI。
 - 认证授权。
 - 持久化审批队列。
+- 生产级 Web UI。
 - PostgreSQL 运行时配置切换和生产部署配置。
 - Milvus。
 - Redis。
@@ -77,6 +78,51 @@
 ## 最近一次 Session
 
 本轮完成：
+
+- 完成 P2 `审批 UI` 的本地最小 Web/API 审批流程。
+- 参考 `D:\Software\MewCode` 的 remote permission future、permission dialog 和权限测试思路；只借鉴异步 pending approval 和 UI/测试结构，没有引入其宿主机直写或本地 shell 权限模型。
+- 新增 `coding_agent.api.approvals`，包含 `ApprovalRecord`、进程内 `ApprovalRegistry`、approve/reject 幂等决议、超时/取消兜底、详情脱敏截断和 `JsonlApprovalAuditStore`。
+- `ApprovalProvider.request` 增加 `session_id` 和 `run_id` 上下文，API 审批可以把待审批项关联到具体 session/run；CLI 终端审批行为保持不变。
+- `create_app()` 会给 API agent 装配 `ApprovalRegistry`，需要审批的 Plan Mode、sandbox 或 patch 操作会挂起等待 Web 端决议。
+- 新增 `GET /approvals/ui` 最小本地审批页面，使用 DOM `textContent` 渲染动态内容，避免 diff preview 中的 HTML/script 被执行。
+- 新增 `GET /approvals`、`GET /approvals/{approval_id}`、`POST /approvals/{approval_id}/approve` 和 `POST /approvals/{approval_id}/reject`。
+- 审批详情展示 tool、reason、session/run、changed files、脱敏 diff preview 或 details。
+- 审批请求和决议会写入 `.coding-agent/approvals/audit.jsonl`。
+- 取消 run/session 或 SSE 消息流断开时会取消对应 pending approval，避免工具永久挂起。
+- 新增 API 回归测试，覆盖 approve 解挂、reject 返回 policy_denied 给模型、patch preview 脱敏、audit 写入、重复决议幂等、非法 status/ID、resolved 查询和 cancel 解挂。
+
+本轮修改文件：
+
+- `README.md`
+- `src/coding_agent/api/app.py`
+- `src/coding_agent/api/approvals.py`
+- `src/coding_agent/runtime/loop.py`
+- `src/coding_agent/cli/app.py`
+- `tests/test_api.py`
+- `tests/test_plan_mode.py`
+- `docs/ARCHITECTURE.md`
+- `docs/TASKS.md`
+- `docs/SESSION_HANDOFF.md`
+- `docs/VERIFICATION.md`
+
+本轮验证结果：
+
+- `uv --cache-dir .uv-cache run ruff check src\coding_agent\api\app.py src\coding_agent\api\approvals.py src\coding_agent\runtime\loop.py src\coding_agent\cli\app.py tests\test_api.py tests\test_plan_mode.py`：通过。
+- `uv --cache-dir .uv-cache run mypy`：通过，48 source files。
+- `uv --cache-dir .uv-cache run mypy src`：通过，48 source files。
+- `uv --cache-dir .uv-cache run pytest tests\test_api.py --basetemp .codex-test-tmp-api-approval -p no:cacheprovider`：14 passed。
+- `uv --cache-dir .uv-cache run pytest tests\test_plan_mode.py tests\test_runtime.py --basetemp .codex-test-tmp-approval-runtime -p no:cacheprovider`：19 passed。
+- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-approval-final -p no:cacheprovider`：108 passed，1 skipped。
+
+本轮未完成事项：
+
+- 审批队列仍是 API 进程内状态，服务重启后 pending approval 不会恢复。
+- 审批审计目前写入本地 JSONL，尚未接入 PostgreSQL `approvals` 表或完整 audit log schema。
+- 审批页面是最小本地页面，尚未实现认证、RBAC、CORS 白名单、操作者身份、多用户或生产级前端。
+- 多 worker 部署下 active run、approval 和 session lock 仍需 Redis/PostgreSQL 协调。
+- Pending patch 仍只在单个 runtime 内存中有效，尚未持久化。
+
+上轮完成：
 
 - 完成 P2 `PostgreSQL 存储` 的最小平台数据层。
 - 新增 `coding_agent.db`，用 SQLAlchemy Core 定义 sessions、runs、session_events、checkpoints、transcripts、approvals、artifacts 和 model_usage 表。
@@ -279,19 +325,19 @@
 
 建议下一轮任务：
 
-从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若严格按当前最高优先级推进，建议做 P2 `审批 UI` 的最小 Web patch 审批流程；如果想先稳住服务化基础，也可以先做 PostgreSQL store 的 CLI/API 配置切换和部署文档。若优先补工程化，可以先增加 coverage 或 pre-commit。
+从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若继续推进 P2 平台化，建议做 PostgreSQL store 的 CLI/API 配置切换和部署文档，或把本轮进程内 approval registry 升级为持久化 approval queue。若优先补工程化，可以先增加 coverage 或 pre-commit。
 
 建议 prompt：
 
 ```text
-本轮只做审批 UI/API 的最小入口，不重构 runtime。请在现有 patch approval 链路后面增加可审查的 Web 审批流程，展示 changed files 和脱敏 diff preview，支持 approve/reject，并写入 audit record。完成后运行 ruff、mypy、pytest，并更新 docs/SESSION_HANDOFF.md 和 docs/VERIFICATION.md。
+本轮只做 PostgreSQL store 的 CLI/API 配置切换，不实现 Redis 或完整 Web UI。请增加配置项，让本地 JSONL 继续作为默认模式，并允许显式 database_url 时使用 PostgresSessionStore；补充合同/装配测试、部署说明和验证记录。
 ```
 
 验收标准：
 
-- 展示 changed files 和脱敏 diff preview。
-- 支持 approve 和 reject。
-- 审批结果有 audit record。
+- 未设置 database_url 时仍使用 JSONL。
+- 显式配置 database_url 时 CLI/API 通过 PostgresSessionStore 保存 session、checkpoint、summary 和 transcript。
+- PostgreSQL 配置错误有清晰错误信息，不泄露凭据。
 - 自动化测试不依赖真实 DeepSeek API。
 - `uv --cache-dir .uv-cache run ruff check`、`uv --cache-dir .uv-cache run mypy`、`uv --cache-dir .uv-cache run mypy src` 和 `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider` 通过。
 

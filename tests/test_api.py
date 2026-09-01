@@ -16,10 +16,13 @@ from coding_agent.ai.contracts import (
     ModelEvent,
     ModelRequest,
     TextDelta,
+    ToolCall,
+    ToolCallCompleted,
     Usage,
     UsageEvent,
 )
 from coding_agent.api.app import ApiSessionManager, create_app
+from coding_agent.api.approvals import ApprovalRecord, ApprovalRegistry
 from coding_agent.config import AgentConfig
 
 
@@ -63,12 +66,19 @@ class CancellableModelAdapter:
         yield TextDelta(text="cancelled after signal")
 
 
-def _agent(tmp_path: Path, model: FakeModelAdapter | CancellableModelAdapter) -> CodingAgent:
+def _agent(
+    tmp_path: Path,
+    model: FakeModelAdapter | CancellableModelAdapter,
+    *,
+    non_interactive: bool = True,
+    plan_mode: bool = False,
+) -> CodingAgent:
     config = AgentConfig(
         workspace=tmp_path,
         model_provider="fake",
         model=model.model.name,
-        non_interactive=True,
+        non_interactive=non_interactive,
+        plan_mode=plan_mode,
     )
     return CodingAgent(config, model)
 
@@ -207,10 +217,270 @@ async def test_cancel_missing_run_returns_false(tmp_path: Path) -> None:
     assert response.json() == {"cancelled": False, "session_id": None, "run_id": "missing-run"}
 
 
+@pytest.mark.asyncio
+async def test_web_approval_approve_unblocks_stream(tmp_path: Path) -> None:
+    model = FakeModelAdapter(
+        [
+            [_submit_plan_call(), Completed()],
+            [TextDelta(text="plan approved"), Completed()],
+        ]
+    )
+    app = create_app(_agent(tmp_path, model, non_interactive=False, plan_mode=True))
+    manager = app.state.session_manager
+    session = await manager.create_session("session-approve")
+
+    stream_task = asyncio.create_task(
+        _collect_manager_events(manager, session.session_id, "needs a plan")
+    )
+    approval = await _wait_for_pending(app.state.approval_registry)
+
+    assert approval.session_id == "session-approve"
+    assert approval.run_id
+    assert approval.tool_name == "submit_plan"
+    assert approval.details["files"] == ["src/coding_agent/api/app.py"]
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            f"/approvals/{approval.approval_id}/approve",
+            json={"reason": "reviewed in test"},
+        )
+
+    events = await asyncio.wait_for(stream_task, timeout=2)
+    assert response.status_code == 200
+    assert response.json()["status"] == "approved"
+    assert [event["type"] for event in events] == [
+        "run_started",
+        "plan_submitted",
+        "approval_requested",
+        "approval_resolved",
+        "plan_approved",
+        "tool_started",
+        "tool_finished",
+        "message_delta",
+        "run_finished",
+    ]
+    assert events[3]["payload"]["approved"] is True
+
+
+@pytest.mark.asyncio
+async def test_web_approval_reject_returns_denial_to_model(tmp_path: Path) -> None:
+    model = FakeModelAdapter(
+        [
+            [_submit_plan_call(), Completed()],
+            [TextDelta(text="plan rejected"), Completed()],
+        ]
+    )
+    app = create_app(_agent(tmp_path, model, non_interactive=False, plan_mode=True))
+    manager = app.state.session_manager
+    session = await manager.create_session("session-reject")
+
+    stream_task = asyncio.create_task(
+        _collect_manager_events(manager, session.session_id, "needs a plan")
+    )
+    approval = await _wait_for_pending(app.state.approval_registry)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            f"/approvals/{approval.approval_id}/reject",
+            json={"reason": "too broad"},
+        )
+
+    events = await asyncio.wait_for(stream_task, timeout=2)
+    finished = [event for event in events if event["type"] == "tool_finished"]
+    assert response.status_code == 200
+    assert response.json()["status"] == "rejected"
+    assert events[3]["payload"]["approved"] is False
+    assert any(event["type"] == "plan_rejected" for event in events)
+    assert finished[0]["payload"]["tool"] == "submit_plan"
+    assert finished[0]["payload"]["result"]["status"] == "policy_denied"
+    assert model.requests[-1].messages[-1].role == "tool"
+    assert "policy_denied" in model.requests[-1].messages[-1].content
+
+
+@pytest.mark.asyncio
+async def test_approval_endpoints_expose_safe_patch_preview_and_audit(
+    tmp_path: Path,
+) -> None:
+    app = create_app(_agent(tmp_path, FakeModelAdapter([])))
+    registry = app.state.approval_registry
+    request_task = asyncio.create_task(
+        registry.request(
+            "apply_patch",
+            "patch application requires approval",
+            {
+                "patch_id": "patch-1",
+                "changed_files": ["src/coding_agent/api/app.py"],
+                "diff_preview": "token=secret-value\n+print('ok')",
+                "token": "secret-value",
+            },
+            session_id="session-patch",
+            run_id="run-patch",
+        )
+    )
+    approval = await _wait_for_pending(registry)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        listed = await client.get("/approvals")
+        detail = await client.get(f"/approvals/{approval.approval_id}")
+        ui = await client.get("/approvals/ui")
+        rejected = await client.post(
+            f"/approvals/{approval.approval_id}/reject",
+            json={"reason": "not needed"},
+        )
+
+    assert listed.status_code == 200
+    assert detail.status_code == 200
+    assert ui.status_code == 200
+    assert "CodingAgent Approvals" in ui.text
+    item = listed.json()[0]
+    assert item["tool_name"] == "apply_patch"
+    assert item["details"]["changed_files"] == ["src/coding_agent/api/app.py"]
+    assert "secret-value" not in json.dumps(item, ensure_ascii=False)
+    assert detail.json()["approval_id"] == approval.approval_id
+    assert rejected.json()["status"] == "rejected"
+    assert await asyncio.wait_for(request_task, timeout=2) is False
+
+    audit = tmp_path / ".coding-agent" / "approvals" / "audit.jsonl"
+    audit_text = audit.read_text(encoding="utf-8")
+    assert '"event_type": "requested"' in audit_text
+    assert '"event_type": "rejected"' in audit_text
+    assert "secret-value" not in audit_text
+
+
+@pytest.mark.asyncio
+async def test_approval_resolution_is_idempotent(tmp_path: Path) -> None:
+    app = create_app(_agent(tmp_path, FakeModelAdapter([])))
+    registry = app.state.approval_registry
+    request_task = asyncio.create_task(
+        registry.request(
+            "submit_plan",
+            "plan mode requires approval before execution",
+            {"plan": "test"},
+            session_id="session-idempotent",
+            run_id="run-idempotent",
+        )
+    )
+    approval = await _wait_for_pending(registry)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        first = await client.post(f"/approvals/{approval.approval_id}/approve")
+        second = await client.post(
+            f"/approvals/{approval.approval_id}/reject",
+            json={"reason": "late click"},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["status"] == "approved"
+    assert second.json()["status"] == "approved"
+    assert await asyncio.wait_for(request_task, timeout=2) is True
+
+
+@pytest.mark.asyncio
+async def test_approval_endpoints_validate_ids_and_status(tmp_path: Path) -> None:
+    app = create_app(_agent(tmp_path, FakeModelAdapter([])))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        bad_status = await client.get("/approvals?status=unknown")
+        bad_id = await client.get("/approvals/../secret")
+        missing = await client.get("/approvals/approval-missing")
+
+    assert bad_status.status_code == 422
+    assert bad_id.status_code in {404, 422}
+    assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_approval_list_can_include_resolved_items(tmp_path: Path) -> None:
+    app = create_app(_agent(tmp_path, FakeModelAdapter([])))
+    registry = app.state.approval_registry
+    request_task = asyncio.create_task(
+        registry.request(
+            "submit_plan",
+            "plan mode requires approval before execution",
+            {"plan": "test"},
+            session_id="session-list",
+            run_id="run-list",
+        )
+    )
+    approval = await _wait_for_pending(registry)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        await client.post(f"/approvals/{approval.approval_id}/reject")
+        pending = await client.get("/approvals")
+        all_items = await client.get("/approvals?status=all")
+
+    assert await asyncio.wait_for(request_task, timeout=2) is False
+    assert pending.status_code == 200
+    assert pending.json() == []
+    assert all_items.status_code == 200
+    assert all_items.json()[0]["status"] == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_approval_cancel_unblocks_pending_request(tmp_path: Path) -> None:
+    model = FakeModelAdapter([[_submit_plan_call(), Completed()]])
+    app = create_app(_agent(tmp_path, model, non_interactive=False, plan_mode=True))
+    manager = app.state.session_manager
+    session = await manager.create_session("session-cancel-approval")
+
+    stream_task = asyncio.create_task(
+        _collect_manager_events(manager, session.session_id, "needs a plan")
+    )
+    approval = await _wait_for_pending(app.state.approval_registry)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(f"/v1/runs/{approval.run_id}/cancel")
+
+    events = await asyncio.wait_for(stream_task, timeout=2)
+    resolved = await app.state.approval_registry.get(approval.approval_id)
+    assert response.status_code == 200
+    assert response.json()["cancelled"] is True
+    assert resolved.status == "cancelled"
+    assert any(event["type"] == "run_cancelled" for event in events)
+
+
 async def _collect_manager_events(
-    manager: ApiSessionManager, session_id: str
+    manager: ApiSessionManager, session_id: str, message: str = "cancel me"
 ) -> list[dict[str, object]]:
     events: list[dict[str, object]] = []
-    async for event in manager.stream_message(session_id, "cancel me"):
+    async for event in manager.stream_message(session_id, message):
         events.append(event.model_dump(mode="json"))
     return events
+
+
+def _submit_plan_call() -> ToolCallCompleted:
+    return ToolCallCompleted(
+        call=ToolCall(
+            id="plan-call",
+            name="submit_plan",
+            arguments_json=(
+                '{"plan": "Add the approval API and tests.", '
+                '"files": ["src/coding_agent/api/app.py"], '
+                '"verification_commands": ["python -m pytest tests/test_api.py"], '
+                '"risks": ["approval flow regression"]}'
+            ),
+        )
+    )
+
+
+async def _wait_for_pending(registry: ApprovalRegistry) -> ApprovalRecord:
+    for _ in range(100):
+        records = await registry.list("pending")
+        if records:
+            return records[0]
+        await asyncio.sleep(0.01)
+    raise AssertionError("approval was not created")

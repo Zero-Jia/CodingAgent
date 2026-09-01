@@ -4,9 +4,9 @@
 
 ## 当前定位
 
-`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、最小 FastAPI/SSE 服务入口、Model Gateway 与 DeepSeek 模型适配器、事件驱动运行时、显式 Plan Mode、Docker 沙箱执行、沙箱执行前 command risk detector、基于 patch 的宿主机写回、JSONL 会话持久化、可选 SQLAlchemy/PostgreSQL 会话存储底座、provider usage token 统计、脱敏 trace 存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
+`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、最小 FastAPI/SSE 服务入口、本地 Web 审批入口、Model Gateway 与 DeepSeek 模型适配器、事件驱动运行时、显式 Plan Mode、Docker 沙箱执行、沙箱执行前 command risk detector、基于 patch 的宿主机写回、JSONL 会话持久化、可选 SQLAlchemy/PostgreSQL 会话存储底座、provider usage token 统计、脱敏 trace 和审批审计存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
 
-当前项目还不是完整企业级平台。它尚未实现 Web UI、认证授权、持久化审批队列、数据库存储运行时配置切换、Milvus、Redis、MCP、Skills、Hooks、真实 memory 检索、模型辅助上下文摘要、多 agent 编排和 worktree 隔离。
+当前项目还不是完整企业级平台。它尚未实现认证授权、持久化审批队列、数据库存储运行时配置切换、生产级 Web UI、Milvus、Redis、MCP、Skills、Hooks、真实 memory 检索、模型辅助上下文摘要、多 agent 编排和 worktree 隔离。
 
 ## 核心设计原则
 
@@ -248,6 +248,7 @@
 - 按 session 和 run 保存 trace events。
 - 将完整文本输出写入脱敏 artifact。
 - 记录应用生命周期日志。
+- API 审批请求和决议会写入本地脱敏 JSONL 审计日志。
 
 后续工作：
 
@@ -303,6 +304,7 @@
 当前文件：
 
 - `app.py`：FastAPI app factory、会话/run 内存索引、SSE 事件序列化和取消入口。
+- `approvals.py`：API 专用的进程内审批队列、审批记录模型和本地 JSONL 审计写入。
 
 当前状态：
 
@@ -311,19 +313,24 @@
 - `GET /v1/sessions` 和 `GET /v1/sessions/{session_id}` 支持读取会话摘要。
 - `POST /v1/sessions/{session_id}/messages/stream` 复用 `ChatSession.send()`，以 Server-Sent Events 原样返回 `AgentEvent`。
 - `POST /v1/runs/{run_id}/cancel` 和 `POST /v1/sessions/{session_id}/cancel` 支持取消当前活跃运行。
+- `GET /approvals/ui` 提供最小本地审批页面。
+- `GET /approvals`、`GET /approvals/{approval_id}`、`POST /approvals/{approval_id}/approve` 和 `POST /approvals/{approval_id}/reject` 支持查看、批准和拒绝当前 API 进程内的待审批操作。
+- API 通过 `ApprovalProvider` 挂起需要人工确认的操作，approve/reject 后原 SSE run 会继续执行；取消 run/session 或消息流断开时会取消对应 pending approval。
+- 审批详情会脱敏并限制大小，页面使用 DOM textContent 渲染动态内容，避免 diff preview 作为 HTML 执行。
 - API 层持有现有 session lock，避免与 CLI 或另一个 API 进程同时写入同一会话。
 - API 层不新增宿主机 shell、直接文件写入或绕过 patch approval 的能力。
 
 已知限制：
 
 - 当前没有认证授权，默认只适合本地可信回环地址。
-- 当前没有 Web 审批响应接口；未预授权的 shell/write/plan approval 仍会按 runtime 策略拒绝。
+- 当前审批队列是进程内状态，服务重启后 pending approval 会丢失。
+- 当前审批审计是本地 JSONL 文件，还没有接入 PostgreSQL `approvals` 表或完整 audit log schema。
 - 当前 active run registry 是进程内状态；多 worker 部署需要 Redis 或数据库锁。
 
 后续工作：
 
 - 增加认证和 CORS 配置。
-- 增加 Web 审批接口和持久化 approval queue。
+- 增加持久化 approval queue 和生产级审批页面。
 - 增加 WebSocket 事件流或保留 SSE 作为稳定协议。
 - 将 active run、审批和会话锁迁移到 Redis/PostgreSQL。
 
@@ -359,7 +366,7 @@
 
 当前状态：
 
-- CLI 是当前唯一交互式用户界面；FastAPI 是服务入口，尚未包含前端 UI。
+- CLI 是当前主要交互式用户界面；FastAPI 另提供一个最小本地审批页面。
 - 审批在终端中完成。
 - `/status` 会显示当前 session 的累计 token 消耗、当前上下文 token、窗口占比和最近 compact 节省量。
 
@@ -367,7 +374,7 @@
 
 - 保留 CLI 作为开发者入口。
 - 在同一个 `CodingAgent` API 上增加 WebSocket 服务或继续扩展 SSE 协议。
-- 增加 Web 审批界面。
+- 将本地审批页面升级为带认证、持久化队列和审计查询的生产级 Web 审批界面。
 
 ## 质量门禁
 

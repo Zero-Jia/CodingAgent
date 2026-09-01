@@ -258,7 +258,7 @@
 
 ### 12. 审批 UI
 
-状态：未开始。
+状态：已完成。
 
 任务：
 
@@ -270,6 +270,17 @@
 - 展示脱敏 diff preview。
 - 支持 approve 和 reject。
 - 写入 audit record。
+
+完成记录：
+
+- 新增 API 专用的进程内 `ApprovalRegistry`，通过现有 `ApprovalProvider` 协议挂起高风险操作并等待 Web 端 approve/reject。
+- `ApprovalProvider.request` 增加 `session_id` 和 `run_id` 上下文，CLI 审批行为保持不变。
+- 新增 `GET /approvals/ui` 最小本地审批页面，使用 DOM `textContent` 渲染动态内容，避免 diff preview 中的 HTML 被执行。
+- 新增 `GET /approvals`、`GET /approvals/{approval_id}`、`POST /approvals/{approval_id}/approve` 和 `POST /approvals/{approval_id}/reject`。
+- 审批详情会展示 tool、reason、session/run、changed files 和脱敏截断后的 details/diff preview。
+- 审批请求和决议会写入 `.coding-agent/approvals/audit.jsonl`，当前仍是本地 JSONL 审计，不是 PostgreSQL 持久化审批队列。
+- 取消 run/session 或消息流断开时会取消对应 pending approval，避免工具永久挂起。
+- 新增 API 回归测试，覆盖 approve、reject、patch preview 脱敏、audit、幂等决议、非法状态/ID、resolved 列表查询和 cancel 解挂。
 
 ## P3：知识检索和多 Agent
 

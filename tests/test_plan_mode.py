@@ -59,7 +59,15 @@ class RecordingApproval(ApprovalProvider):
         self.approved = approved
         self.requests: list[tuple[str, str, dict[str, object]]] = []
 
-    async def request(self, tool_name: str, reason: str, params: dict[str, object]) -> bool:
+    async def request(
+        self,
+        tool_name: str,
+        reason: str,
+        params: dict[str, object],
+        *,
+        session_id: str = "",
+        run_id: str = "",
+    ) -> bool:
         self.requests.append((tool_name, reason, params))
         return self.approved
 
@@ -69,7 +77,15 @@ class SequencedApproval(ApprovalProvider):
         self.approvals = approvals
         self.requests: list[tuple[str, str, dict[str, object]]] = []
 
-    async def request(self, tool_name: str, reason: str, params: dict[str, object]) -> bool:
+    async def request(
+        self,
+        tool_name: str,
+        reason: str,
+        params: dict[str, object],
+        *,
+        session_id: str = "",
+        run_id: str = "",
+    ) -> bool:
         self.requests.append((tool_name, reason, params))
         if not self.approvals:
             return False

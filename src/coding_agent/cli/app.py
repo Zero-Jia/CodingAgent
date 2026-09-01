@@ -20,7 +20,15 @@ app = typer.Typer(help="安全优先的本地编程 Agent。", no_args_is_help=T
 
 
 class TerminalApproval(ApprovalProvider):
-    async def request(self, tool_name: str, reason: str, params: dict[str, object]) -> bool:
+    async def request(
+        self,
+        tool_name: str,
+        reason: str,
+        params: dict[str, object],
+        *,
+        session_id: str = "",
+        run_id: str = "",
+    ) -> bool:
         objective = params.get("objective")
         if isinstance(objective, str) and objective:
             typer.echo("目标：\n" + objective)

@@ -32,18 +32,7 @@ uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovid
 
 结果：
 
-依赖更新：
-
-```text
-uv --cache-dir .uv-cache add "sqlalchemy==2.0.43" "alembic==1.16.5" "psycopg[binary]==3.2.9"
-Resolved 40 packages in 2.59s
-Installed alembic v1.16.5
-Installed psycopg v3.2.9
-Installed psycopg-binary v3.2.9
-Installed sqlalchemy v2.0.43
-```
-
-初次在受限网络沙箱中运行依赖更新失败，错误为无法访问 PyPI；经授权后成功。
+本轮新增 API 本地最小 Web 审批入口、进程内 approval registry 和脱敏 JSONL audit 后，验证结果如下。
 
 ```text
 uv --cache-dir .uv-cache run ruff check
@@ -52,36 +41,43 @@ All checks passed!
 
 ```text
 uv --cache-dir .uv-cache run mypy
-Success: no issues found in 47 source files
+Success: no issues found in 48 source files
 ```
 
 ```text
 uv --cache-dir .uv-cache run mypy src
-Success: no issues found in 47 source files
-```
-
-```text
-uv --cache-dir .uv-cache run mypy src tests/test_session_store_contract.py
 Success: no issues found in 48 source files
 ```
 
-定向 PostgreSQL/session store 测试：
+定向 API 审批测试：
 
 ```text
-uv --cache-dir .uv-cache run pytest tests/test_session_store_contract.py --basetemp .codex-test-tmp-postgres-targeted-2 -p no:cacheprovider
-6 passed
+uv --cache-dir .uv-cache run pytest tests/test_api.py --basetemp .codex-test-tmp-api-approval -p no:cacheprovider
+14 passed
+```
+
+定向 Plan Mode/runtime 回归测试：
+
+```text
+uv --cache-dir .uv-cache run pytest tests/test_plan_mode.py tests/test_runtime.py --basetemp .codex-test-tmp-approval-runtime -p no:cacheprovider
+19 passed
 ```
 
 全量测试：
 
 ```text
+uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-approval-final -p no:cacheprovider
+108 passed, 1 skipped
+```
+
+本轮自动化测试仍不依赖真实 DeepSeek API，也不启动 Docker 或真实 PostgreSQL 服务。API 审批测试使用 fake model 覆盖 approve、reject、patch preview 脱敏、audit 写入、幂等决议、非法状态/ID、resolved 查询和 cancel 解挂。
+
+历史验证摘要：
+
+```text
 uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-postgres-final2 -p no:cacheprovider
 101 passed, 1 skipped
 ```
-
-本轮新增 PostgreSQL/SQLAlchemy 会话存储和 Alembic 初始迁移后，自动化测试仍不依赖真实 DeepSeek API，也不启动 Docker 或真实 PostgreSQL 服务。迁移测试使用 SQLite 验证表结构，repository contract tests 同时覆盖 JSONL 和 SQLAlchemy store。
-
-历史验证摘要：
 
 ```text
 uv --cache-dir .uv-cache run pytest tests/test_api.py --basetemp .codex-test-tmp-api -p no:cacheprovider
