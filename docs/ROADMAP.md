@@ -26,6 +26,7 @@
 - JSONL session、checkpoint、transcript、trace、artifact 和 application log。
 - SQLAlchemy/MySQL 会话存储底座和 Alembic 初始迁移。
 - CLI/API MySQL session store 运行时配置切换，默认仍保留 JSONL。
+- MySQL-backed API approval queue，配置数据库后审批请求和决议可持久化。
 - 最小 eval report 契约。
 - 面向 runtime、policy、tools、sandbox、patch validation 和 sessions 的基础测试。
 - `ruff`、`mypy`、`pytest` 配置。
@@ -35,7 +36,7 @@
 
 当前尚未实现：
 
-- Web UI、认证授权、持久化审批队列。
+- Web UI、认证授权、生产级审批控制台。
 - Milvus、Redis。
 - MCP。
 - Skills。
@@ -109,8 +110,8 @@
 - 已完成：增加 MySQL 运行时配置切换和生产连接池设置。
 - 增加更细粒度 turns、tools、patches 和 audit logs schema。
 - 增加 Redis，用于 task state、locks 和 pub/sub。
-- 增加持久化 approval queue。
-- 已完成：增加最小本地 Web patch 审批页面和 approve/reject API；当前审批队列仍是进程内状态，审计写入本地 JSONL。
+- 已完成：增加持久化 approval queue；配置 MySQL 后，审批请求、状态查询和 approve/reject 决议写入 `approvals` 表，等待中的运行可通过数据库决议继续执行。
+- 已完成：增加最小本地 Web patch 审批页面和 approve/reject API；JSONL 本地模式下审批队列仍是进程内状态，审计写入本地 JSONL。
 
 验收标准：
 
@@ -119,7 +120,7 @@
 - JSONL 仍可作为本地开发模式。
 - MySQL 实现通过 repository contract tests。
 - 本地最小审批 UI 可以展示 changed files、脱敏 diff preview，并支持 approve/reject。
-- 持久化 approval queue 完成后，审批状态在进程重启后仍然存在。
+- 配置 MySQL 后，approval queue 状态可跨 API registry 查询和决议；JSONL 本地模式保持进程内行为。
 
 ## Phase 4：知识检索和记忆
 

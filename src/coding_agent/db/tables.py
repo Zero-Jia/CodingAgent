@@ -142,6 +142,7 @@ approvals = Table(
     "approvals",
     metadata,
     Column("approval_id", String(128), primary_key=True),
+    Column("schema_version", Integer, nullable=False, default=1, server_default="1"),
     Column(
         "session_id",
         String(128),
@@ -157,10 +158,14 @@ approvals = Table(
         index=True,
     ),
     Column("tool_name", String(128), nullable=False),
+    Column("reason", String(2000), nullable=False, default="", server_default=""),
     Column("status", String(32), nullable=False),
     Column("details", JSON, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("expires_at", DateTime(timezone=True), nullable=True),
     Column("resolved_at", DateTime(timezone=True), nullable=True),
+    Column("resolution_reason", String(2000), nullable=False, default="", server_default=""),
+    Column("resolved_by", String(128), nullable=False, default="", server_default=""),
     mysql_engine="InnoDB",
     mysql_charset="utf8mb4",
 )

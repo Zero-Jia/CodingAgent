@@ -231,7 +231,7 @@
 - 消息接口使用 Server-Sent Events 原样返回 `AgentEvent`，便于后续前端 UI 渲染流式文本、工具事件、审批事件、token 事件和完成/失败/取消事件。
 - API 层复用现有 session lock，并用进程内 active run registry 防止同一会话并发发送和支持取消。
 - 新增 `tests/test_api.py`，使用 fake model 覆盖创建/列出 session、SSE 事件流、未知 session、非法 session id、空消息、取消活跃运行和取消不存在的 run。
-- 当前未实现认证授权、Web 审批响应接口、持久化 approval queue 和跨进程 active run registry；这些仍属于后续平台化任务。
+- 当前未实现认证授权、生产级 Web UI 和跨进程 active run registry；JSONL 本地模式下 approval queue 仍是进程内状态。
 
 ### 11. MySQL 存储
 
@@ -254,7 +254,7 @@
 - 新增 `MySqlSessionStore`，实现 `SessionStore` 的事件、checkpoint、summary 和 transcript 核心行为。
 - 新增 Alembic 初始迁移 `0001_create_platform_storage`，创建 sessions、session_events、checkpoints、transcripts、approvals、artifacts 和 model_usage 表。
 - 新增 `tests/test_session_store_contract.py`，让 JSONL 与 SQLAlchemy store 共同通过 repository contract tests，并覆盖 summary 更新不得级联删除事件和 checkpoint。
-- JSONL 仍是当前 CLI/API 默认本地模式；分布式锁、持久化 approval queue 和更细粒度 runs/turns/tools/patches/audit logs 属于后续任务。
+- JSONL 仍是当前 CLI/API 默认本地模式；分布式锁、更细粒度 runs/turns/tools/patches/audit logs 和 pending patch 持久化属于后续任务。
 
 ### 11a. MySQL 运行时配置切换
 
@@ -298,14 +298,40 @@
 
 完成记录：
 
-- 新增 API 专用的进程内 `ApprovalRegistry`，通过现有 `ApprovalProvider` 协议挂起高风险操作并等待 Web 端 approve/reject。
+- 新增 API 专用的 `ApprovalRegistry`，通过现有 `ApprovalProvider` 协议挂起高风险操作并等待 Web 端 approve/reject。
 - `ApprovalProvider.request` 增加 `session_id` 和 `run_id` 上下文，CLI 审批行为保持不变。
 - 新增 `GET /approvals/ui` 最小本地审批页面，使用 DOM `textContent` 渲染动态内容，避免 diff preview 中的 HTML 被执行。
 - 新增 `GET /approvals`、`GET /approvals/{approval_id}`、`POST /approvals/{approval_id}/approve` 和 `POST /approvals/{approval_id}/reject`。
 - 审批详情会展示 tool、reason、session/run、changed files 和脱敏截断后的 details/diff preview。
-- 审批请求和决议会写入 `.coding-agent/approvals/audit.jsonl`，当前仍是本地 JSONL 审计，不是 MySQL 持久化审批队列。
+- JSONL 本地模式下审批请求仍保存在当前 API 进程内，审批请求和决议会写入 `.coding-agent/approvals/audit.jsonl`。
 - 取消 run/session 或消息流断开时会取消对应 pending approval，避免工具永久挂起。
 - 新增 API 回归测试，覆盖 approve、reject、patch preview 脱敏、audit、幂等决议、非法状态/ID、resolved 列表查询和 cancel 解挂。
+
+### 12a. 持久化 Approval Queue
+
+状态：已完成。
+
+任务：
+
+让配置 MySQL 后的 API approval queue 可以持久化审批请求和决议，同时保留 JSONL 本地模式的轻量行为。
+
+验收标准：
+
+- 未配置数据库时，现有进程内 approval registry 和本地 JSONL audit 行为不回退。
+- 配置 MySQL 后，审批请求、状态查询和 approve/reject 决议可通过数据库持久化。
+- 不同 API registry 可以通过同一个数据库查询和决议同一个 pending approval。
+- 等待中的 runtime 可以观察数据库中的 approve/reject 决议并继续执行。
+- 审批详情继续脱敏和限制大小，不泄露密钥、token 或数据库凭据。
+- 自动化测试不依赖真实 DeepSeek API 或真实 MySQL 服务。
+
+完成记录：
+
+- 新增 `ApprovalStore` 协议、`InMemoryApprovalStore` 和 `MySqlApprovalStore`。
+- `ApprovalRegistry` 保留本地 future map，并以 store 作为审批状态源；MySQL 模式下等待中的 request 会轮询数据库决议，支持其他 API registry 完成 approve/reject。
+- `approvals` 表新增 `schema_version`、`reason`、`expires_at`、`resolution_reason` 和 `resolved_by` 字段，并新增 Alembic migration `0002_add_persistent_approval_queue_fields`。
+- `create_app()` 在检测到 `MySqlSessionStore` 时自动装配 `MySqlApprovalStore`；否则继续使用进程内 store。
+- API 测试新增跨 registry 持久化审批用例，覆盖另一 API registry 查询并 approve 后原 pending request 解挂。
+- 当前仍未持久化 pending patch 内容；进程重启后不能直接应用旧 runtime 内存中的 patch，后续需要单独设计 patch package 持久化。
 
 ## P3：知识检索和多 Agent
 

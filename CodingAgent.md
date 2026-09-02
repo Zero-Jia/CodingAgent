@@ -2,7 +2,7 @@
 
 本文档描述的是以当前 `CodingAgent` 项目为基础，参考 `D:\Software\MewCode` 的完整 agent 运行时能力，并按照企业级 coding agent 的工程标准继续演进后的目标形态。
 
-当前项目已经具备一个安全优先的本地 coding agent 内核：Python 包结构清晰，支持 DeepSeek 模型调用、事件驱动运行时、只读工具、Docker 无网络沙箱、补丁注册与审批回写、默认 JSONL 会话与追踪存储、可配置 SQLAlchemy/MySQL 会话存储、脱敏 artifact、基础测试和严格类型检查。后续完整形态不是简单扩展一个 CLI 工具，而是将其升级为一个可审计、可扩展、可部署、支持团队协作和多模型接入的企业级 agent 平台。
+当前项目已经具备一个安全优先的本地 coding agent 内核：Python 包结构清晰，支持 DeepSeek 模型调用、事件驱动运行时、只读工具、Docker 无网络沙箱、补丁注册与审批回写、默认 JSONL 会话与追踪存储、可配置 SQLAlchemy/MySQL 会话存储、MySQL-backed API approval queue、脱敏 artifact、基础测试和严格类型检查。后续完整形态不是简单扩展一个 CLI 工具，而是将其升级为一个可审计、可扩展、可部署、支持团队协作和多模型接入的企业级 agent 平台。
 
 ## 1. 项目整体定位
 
@@ -190,7 +190,7 @@ tool call/result 配对保护。CLI 已能基于 provider usage 显示 session �
 
 ### 4.8 数据层不足
 
-当前默认使用本地 JSONL 文件，适合 MVP；项目已提供 SQLAlchemy/MySQL 会话存储底座、Alembic 初始迁移和 CLI/API 运行时配置切换。仍缺少分布式锁、持久化审批队列和完整审计数据模型。最终需要：
+当前默认使用本地 JSONL 文件，适合 MVP；项目已提供 SQLAlchemy/MySQL 会话存储底座、MySQL-backed API approval queue、Alembic migration 和 CLI/API 运行时配置切换。仍缺少分布式锁、pending patch 持久化审批包和完整审计数据模型。最终需要：
 
 - MySQL 存储结构化业务数据
 - Milvus 存储代码和记忆向量

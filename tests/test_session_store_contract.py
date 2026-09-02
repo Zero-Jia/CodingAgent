@@ -265,6 +265,9 @@ def test_alembic_migration_creates_platform_storage_tables(
     engine = _create_engine(database_path)
     try:
         table_names = set(inspect(engine).get_table_names())
+        approval_columns = {
+            column["name"] for column in inspect(engine).get_columns("approvals")
+        }
 
         assert {
             "sessions",
@@ -277,6 +280,13 @@ def test_alembic_migration_creates_platform_storage_tables(
             "model_usage",
             "alembic_version",
         }.issubset(table_names)
+        assert {
+            "schema_version",
+            "reason",
+            "expires_at",
+            "resolution_reason",
+            "resolved_by",
+        }.issubset(approval_columns)
     finally:
         engine.dispose()
 

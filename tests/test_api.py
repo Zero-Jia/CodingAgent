@@ -4,9 +4,11 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
+from pydantic import SecretStr
 
 from coding_agent.agent.coding_agent import CodingAgent
 from coding_agent.ai.contracts import (
@@ -22,8 +24,9 @@ from coding_agent.ai.contracts import (
     UsageEvent,
 )
 from coding_agent.api.app import ApiSessionManager, create_app
-from coding_agent.api.approvals import ApprovalRecord, ApprovalRegistry
+from coding_agent.api.approvals import ApprovalRecord, ApprovalRegistry, MySqlApprovalStore
 from coding_agent.config import AgentConfig
+from coding_agent.sessions.mysql import MySqlSessionStore
 
 
 class FakeModelAdapter:
@@ -79,6 +82,22 @@ def _agent(
         model=model.model.name,
         non_interactive=non_interactive,
         plan_mode=plan_mode,
+    )
+    return CodingAgent(config, model)
+
+
+def _database_agent(
+    tmp_path: Path,
+    model: FakeModelAdapter | CancellableModelAdapter,
+    database_url: str,
+) -> CodingAgent:
+    config = AgentConfig(
+        workspace=tmp_path,
+        model_provider="fake",
+        model=model.model.name,
+        non_interactive=False,
+        database_url=SecretStr(database_url),
+        database_create_schema=True,
     )
     return CodingAgent(config, model)
 
@@ -261,7 +280,7 @@ async def test_web_approval_approve_unblocks_stream(tmp_path: Path) -> None:
         "message_delta",
         "run_finished",
     ]
-    assert events[3]["payload"]["approved"] is True
+    assert cast(dict[str, object], events[3]["payload"])["approved"] is True
 
 
 @pytest.mark.asyncio
@@ -293,10 +312,12 @@ async def test_web_approval_reject_returns_denial_to_model(tmp_path: Path) -> No
     finished = [event for event in events if event["type"] == "tool_finished"]
     assert response.status_code == 200
     assert response.json()["status"] == "rejected"
-    assert events[3]["payload"]["approved"] is False
+    assert cast(dict[str, object], events[3]["payload"])["approved"] is False
     assert any(event["type"] == "plan_rejected" for event in events)
-    assert finished[0]["payload"]["tool"] == "submit_plan"
-    assert finished[0]["payload"]["result"]["status"] == "policy_denied"
+    finished_payload = cast(dict[str, object], finished[0]["payload"])
+    finished_result = cast(dict[str, object], finished_payload["result"])
+    assert finished_payload["tool"] == "submit_plan"
+    assert finished_result["status"] == "policy_denied"
     assert model.requests[-1].messages[-1].role == "tool"
     assert "policy_denied" in model.requests[-1].messages[-1].content
 
@@ -451,6 +472,62 @@ async def test_approval_cancel_unblocks_pending_request(tmp_path: Path) -> None:
     assert response.json()["cancelled"] is True
     assert resolved.status == "cancelled"
     assert any(event["type"] == "run_cancelled" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_mysql_approval_queue_can_be_resolved_by_another_registry(
+    tmp_path: Path,
+) -> None:
+    database_url = f"sqlite+pysqlite:///{(tmp_path / 'approvals.db').as_posix()}"
+    agent_one = _database_agent(tmp_path, FakeModelAdapter([]), database_url)
+    agent_two = _database_agent(tmp_path, FakeModelAdapter([]), database_url)
+    app_one = create_app(agent_one)
+    app_two = create_app(agent_two)
+    registry_one = app_one.state.approval_registry
+
+    assert isinstance(agent_one.sessions, MySqlSessionStore)
+    assert isinstance(registry_one.store, MySqlApprovalStore)
+
+    request_task = asyncio.create_task(
+        registry_one.request(
+            "apply_patch",
+            "patch application requires approval",
+            {
+                "patch_id": "patch-1",
+                "changed_files": ["src/coding_agent/api/app.py"],
+                "diff_preview": "password=secret\n+ok",
+            },
+            session_id="session-persistent-approval",
+            run_id="run-persistent-approval",
+        )
+    )
+    approval = await _wait_for_pending(registry_one)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app_two), base_url="http://testserver"
+    ) as client:
+        listed = await client.get("/approvals")
+        approved = await client.post(
+            f"/approvals/{approval.approval_id}/approve",
+            json={"reason": "approved from another API process"},
+        )
+
+    assert listed.status_code == 200
+    assert listed.json()[0]["approval_id"] == approval.approval_id
+    assert "secret" not in json.dumps(listed.json(), ensure_ascii=False)
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "approved"
+    assert approved.json()["resolution_reason"] == "approved from another API process"
+    assert approved.json()["resolved_by"] == "local-api"
+    assert await asyncio.wait_for(request_task, timeout=2) is True
+
+    resolved = await registry_one.get(approval.approval_id)
+    assert resolved.status == "approved"
+
+    if isinstance(agent_one.sessions, MySqlSessionStore):
+        agent_one.sessions.engine.dispose()
+    if isinstance(agent_two.sessions, MySqlSessionStore):
+        agent_two.sessions.engine.dispose()
 
 
 async def _collect_manager_events(

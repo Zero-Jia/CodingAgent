@@ -39,7 +39,7 @@
 - 供应商无关的模型、消息、工具调用、usage 和事件契约。
 - 事件驱动 runtime，支持工具执行、审批流、取消、trace 写入和 artifact 写入。
 - 显式 Plan Mode，支持 `--plan`，要求模型在使用沙箱或 patch 工具前先提交计划并获批。
-- API 本地最小 Web 审批入口，支持查看 pending approval、approve/reject 和脱敏 JSONL 审计。
+- API 本地最小 Web 审批入口，支持查看 pending approval、approve/reject、MySQL-backed approval queue 和脱敏 JSONL 审计。
 - 确定性 context manager，支持 token 预算触发、自动 compact、近期尾部保留和 tool call/result 边界保护。
 - Session 级 token usage 账本，支持 provider usage 累计统计、当前上下文 token、窗口占比和 compact 节省量展示。
 - 只读仓库工具：`read`、`search`、`git_diff`。
@@ -51,6 +51,7 @@
 - JSONL session、checkpoint、transcript、summary、trace、artifact 和 application log。
 - SQLAlchemy/MySQL 会话存储底座和 Alembic 初始迁移。
 - CLI/API MySQL session store 运行时配置切换，默认仍使用 JSONL，显式 `database_url` 时使用 `MySqlSessionStore`。
+- 配置 MySQL 后，API approval queue 会持久化审批请求、状态查询和 approve/reject 决议；等待中的 runtime 可以观察数据库决议并继续执行。
 - 连续 chat session 的独占锁。
 - `src/coding_agent/py.typed` 包类型标记。
 - GitHub Actions 最小 CI workflow，运行 ruff、mypy 和 pytest。
@@ -62,7 +63,6 @@
 尚未实现：
 
 - 认证授权。
-- 持久化审批队列。
 - 生产级 Web UI。
 - Milvus。
 - Redis。
@@ -73,11 +73,61 @@
 - 模型辅助上下文摘要。
 - 多 agent 编排。
 - Worktree 隔离。
+- Pending patch 持久化。
 - coverage、pre-commit、release workflow、安全扫描和完整 CI/CD 发布流水线。
 
 ## 最近一次 Session
 
 本轮完成：
+
+- 完成持久化 approval queue 的小边界任务，不实现 Redis、完整 Web UI 或 pending patch 持久化。
+- 参考 `D:\Software\MewCode` 的 `PermissionRequest`/`PermissionResponse`、remote pending permission future 和权限测试思路；只借鉴“挂起审批、由 UI/API 决议、拒绝后把结果回给模型”的事件模型，没有引入其宿主机直写或本地 shell 权限模型。
+- 新增 `ApprovalStore` 协议、`InMemoryApprovalStore` 和 `MySqlApprovalStore`。
+- `ApprovalRegistry` 保留本地 future map 以唤醒当前 runtime，并把 store 作为审批状态源；MySQL 模式下等待中的 request 会轮询数据库最终决议，因此另一个 API registry 可以通过同一数据库 approve/reject 并让原运行继续。
+- JSONL 本地模式继续使用进程内 approval queue 和 `.coding-agent/approvals/audit.jsonl`，保持默认本地行为不回退。
+- `create_app()` 在检测到 `MySqlSessionStore` 时自动装配 `MySqlApprovalStore`，否则使用进程内 store。
+- `approvals` 表新增 `schema_version`、`reason`、`expires_at`、`resolution_reason` 和 `resolved_by` 字段。
+- 新增 Alembic migration `0002_add_persistent_approval_queue_fields`，从 `0001_create_platform_storage` 平滑升级。
+- API 测试新增跨 registry 持久化审批用例：第一个 registry 创建 pending approval，第二个 registry 从同一数据库查询并 approve，原 pending request 被数据库决议唤醒。
+- README、架构、路线图、任务和验证文档已同步当前能力边界。
+
+本轮修改文件：
+
+- `README.md`
+- `migrations/versions/0002_add_persistent_approval_queue_fields.py`
+- `src/coding_agent/api/app.py`
+- `src/coding_agent/api/approvals.py`
+- `src/coding_agent/db/tables.py`
+- `tests/test_api.py`
+- `tests/test_session_store_contract.py`
+- `docs/ARCHITECTURE.md`
+- `docs/ROADMAP.md`
+- `docs/TASKS.md`
+- `docs/SESSION_HANDOFF.md`
+- `docs/VERIFICATION.md`
+
+本轮验证结果：
+
+- `uv --cache-dir .uv-cache run ruff check src\coding_agent\api\approvals.py src\coding_agent\api\app.py src\coding_agent\db\tables.py tests\test_api.py tests\test_session_store_contract.py migrations\versions\0002_add_persistent_approval_queue_fields.py`：通过。
+- `uv --cache-dir .uv-cache run mypy src\coding_agent\api\approvals.py src\coding_agent\api\app.py tests\test_api.py`：通过。
+- `uv --cache-dir .uv-cache run pytest tests\test_api.py --basetemp .codex-test-tmp-approval-api -p no:cacheprovider`：15 passed。
+- `uv --cache-dir .uv-cache run pytest tests\test_session_store_contract.py --basetemp .codex-test-tmp-approval-schema -p no:cacheprovider`：8 passed。
+- `uv --cache-dir .uv-cache run pytest tests\test_storage_config.py --basetemp .codex-test-tmp-approval-storage -p no:cacheprovider`：9 passed。
+- `uv --cache-dir .uv-cache run ruff check`：通过。
+- `uv --cache-dir .uv-cache run mypy`：通过，50 source files。
+- `uv --cache-dir .uv-cache run mypy src`：通过，50 source files。
+- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-approval-final -p no:cacheprovider`：124 passed，1 skipped。
+
+本轮未完成事项：
+
+- 未用真实 DeepSeek API 启动完整聊天回合。
+- 未对本机真实 MySQL 执行 `0002` migration；自动化通过 SQLite Alembic migration 和 SQLAlchemy MySQL dialect 编译测试覆盖结构兼容性。
+- MySQL 模式持久化的是 approval request 和 decision，不持久化 runtime 内存中的 pending patch；服务重启后不能直接应用旧 patch。
+- Session lock 和 active run registry 仍是本地文件/进程内状态，不支持多 worker 分布式协调。
+- 审批审计仍写本地 JSONL，尚未实现完整数据库 audit log schema。
+- 审批页面仍是最小本地页面，尚未实现认证、RBAC、CORS 白名单、操作者身份、多用户或生产级前端。
+
+上轮完成：
 
 - 完成数据库目标替换为 MySQL，保留 JSONL 默认本地模式和 SQLAlchemy 抽象。
 - 参考 `D:\Software\MewCode` 的配置、runtime 装配和 session manager 分层方式；只借鉴入口装配分层，没有复制其本地 session 文件格式或宿主机权限模型。
@@ -441,20 +491,21 @@
 
 建议下一轮任务：
 
-从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若继续推进平台化，建议把本轮进程内 approval registry 升级为持久化 approval queue；若优先补工程化，可以先增加 coverage 或 pre-commit。
+从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若继续推进平台化，建议先做 pending patch 持久化审批包，补齐“服务重启后仍能审查并应用旧 patch”的链路；若优先补工程化，可以先增加 coverage 或 pre-commit。
 
 建议 prompt：
 
 ```text
-本轮只做持久化 approval queue，不实现 Redis 或完整 Web UI。请让审批请求和决议可落入 MySQL，同时保留本地 JSONL audit；补充合同/装配测试、部署说明和验证记录。
+本轮只做 pending patch 持久化审批包，不实现 Redis 或完整 Web UI。请让沙箱产生的待回写 patch 可以安全持久化、重启后重新校验并继续通过 approval queue 审查；保留当前 Docker sandbox + patch-only 写回模型，补充 patch 校验测试、API 测试、迁移和验证记录。
 ```
 
 验收标准：
 
-- 未配置数据库时，现有进程内 approval registry 和本地 JSONL audit 行为不回退。
-- 配置 MySQL 后，审批请求、状态查询和 approve/reject 决议可通过数据库持久化。
-- 服务重启后，未决审批可被重新查询和处理，过期/取消状态一致。
+- 未配置数据库时，当前内存 `PatchRegistry` 行为不回退。
+- 配置 MySQL 后，pending patch 的 patch text、changed files、snapshot hashes、diff preview 和状态可持久化。
+- 服务重启后，旧 patch 必须重新执行结构校验、敏感路径校验、文件哈希校验和 `git apply --check`，不能盲目回写。
 - 审批详情继续脱敏和限制大小，不泄露密钥、token 或数据库凭据。
+- 二进制 patch、mode change、rename/copy、submodule、symlink 和 executable patch 仍应拒绝。
 - 自动化测试不依赖真实 DeepSeek API。
 - `uv --cache-dir .uv-cache run ruff check`、`uv --cache-dir .uv-cache run mypy`、`uv --cache-dir .uv-cache run mypy src` 和 `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider` 通过。
 

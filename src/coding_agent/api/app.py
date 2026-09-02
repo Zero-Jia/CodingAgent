@@ -21,10 +21,12 @@ from coding_agent.api.approvals import (
     ApprovalResolutionRequest,
     ApprovalStatus,
     JsonlApprovalAuditStore,
+    MySqlApprovalStore,
 )
 from coding_agent.config import AgentConfig
 from coding_agent.runtime.events import AgentEvent
 from coding_agent.sessions.lock import SessionLease, SessionLockedError, acquire_session_lock
+from coding_agent.sessions.mysql import MySqlSessionStore
 from coding_agent.sessions.store import SessionSummary
 
 _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
@@ -216,7 +218,7 @@ def create_app(
         effective_config = config or AgentConfig.from_environment(Path.cwd())
         agent = CodingAgent(effective_config, create_model_adapter(effective_config))
 
-    approvals = ApprovalRegistry(JsonlApprovalAuditStore(agent.data_root))
+    approvals = _approval_registry(agent)
     agent.approval = approvals
     manager = ApiSessionManager(agent, approvals)
 
@@ -354,6 +356,13 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(error)) from error
 
     return app
+
+
+def _approval_registry(agent: CodingAgent) -> ApprovalRegistry:
+    store = None
+    if isinstance(agent.sessions, MySqlSessionStore):
+        store = MySqlApprovalStore(agent.sessions.engine)
+    return ApprovalRegistry(JsonlApprovalAuditStore(agent.data_root), store=store)
 
 
 def _sse(event: AgentEvent) -> str:
