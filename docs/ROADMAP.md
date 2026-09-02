@@ -24,7 +24,8 @@
 - 基于 `apply_patch` 的宿主机写回。
 - 工作区敏感路径过滤。
 - JSONL session、checkpoint、transcript、trace、artifact 和 application log。
-- SQLAlchemy/PostgreSQL 会话存储底座和 Alembic 初始迁移。
+- SQLAlchemy/MySQL 会话存储底座和 Alembic 初始迁移。
+- CLI/API MySQL session store 运行时配置切换，默认仍保留 JSONL。
 - 最小 eval report 契约。
 - 面向 runtime、policy、tools、sandbox、patch validation 和 sessions 的基础测试。
 - `ruff`、`mypy`、`pytest` 配置。
@@ -35,7 +36,7 @@
 当前尚未实现：
 
 - Web UI、认证授权、持久化审批队列。
-- PostgreSQL 运行时配置切换、Milvus、Redis。
+- Milvus、Redis。
 - MCP。
 - Skills。
 - Hooks。
@@ -102,10 +103,10 @@
 
 - 已完成：基于现有 `CodingAgent` API 增加最小 FastAPI app。
 - 已完成：增加 SSE 事件流。
-- 已完成：增加 PostgreSQL/SQLAlchemy 基础 schema，覆盖 sessions、runs、events、checkpoints、transcripts、approvals、artifacts 和 model usage。
+- 已完成：增加 MySQL/SQLAlchemy 基础 schema，覆盖 sessions、runs、events、checkpoints、transcripts、approvals、artifacts 和 model usage。
 - 已完成：增加 SQLAlchemy repository，当前实现 `SessionStore` 核心协议。
 - 已完成：增加 Alembic 初始 migration。
-- 增加 PostgreSQL 运行时配置切换和生产连接池设置。
+- 已完成：增加 MySQL 运行时配置切换和生产连接池设置。
 - 增加更细粒度 turns、tools、patches 和 audit logs schema。
 - 增加 Redis，用于 task state、locks 和 pub/sub。
 - 增加持久化 approval queue。
@@ -116,7 +117,7 @@
 - CLI 和 API 复用同一套 runtime。
 - API 可以创建 session、发送消息、流式返回事件并取消活跃 run。
 - JSONL 仍可作为本地开发模式。
-- PostgreSQL 实现通过 repository contract tests。
+- MySQL 实现通过 repository contract tests。
 - 本地最小审批 UI 可以展示 changed files、脱敏 diff preview，并支持 approve/reject。
 - 持久化 approval queue 完成后，审批状态在进程重启后仍然存在。
 

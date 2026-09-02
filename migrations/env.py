@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
 
+from coding_agent.db.diagnostics import database_connection_error_message
+from coding_agent.db.engine import create_database_engine
 from coding_agent.db.tables import metadata
 
 config = context.config
@@ -16,12 +18,25 @@ if config.config_file_name is not None:
 target_metadata = metadata
 
 
+def _database_url() -> str:
+    x_args = context.get_x_argument(as_dictionary=True)
+    configured = (
+        x_args.get("database_url")
+        or os.environ.get("CODING_AGENT_DATABASE_URL")
+        or config.get_main_option("sqlalchemy.url")
+    )
+    if configured and configured.strip():
+        return configured.strip()
+    raise RuntimeError(
+        "database URL is required for Alembic migrations. Set "
+        "CODING_AGENT_DATABASE_URL, pass -x database_url=..., or configure "
+        "sqlalchemy.url in alembic.ini."
+    )
+
+
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
-    if not url:
-        raise RuntimeError("alembic sqlalchemy.url is required for offline migrations")
     context.configure(
-        url=url,
+        url=_database_url(),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -31,15 +46,19 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
-    with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
-        with context.begin_transaction():
-            context.run_migrations()
+    database_url = _database_url()
+    connectable = None
+    try:
+        connectable = create_database_engine(database_url)
+        with connectable.connect() as connection:
+            context.configure(connection=connection, target_metadata=target_metadata)
+            with context.begin_transaction():
+                context.run_migrations()
+    except Exception as error:
+        raise RuntimeError(database_connection_error_message(database_url, error)) from error
+    finally:
+        if connectable is not None:
+            connectable.dispose()
 
 
 if context.is_offline_mode():

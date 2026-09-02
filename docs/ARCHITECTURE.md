@@ -4,9 +4,9 @@
 
 ## 当前定位
 
-`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、最小 FastAPI/SSE 服务入口、本地 Web 审批入口、Model Gateway 与 DeepSeek 模型适配器、事件驱动运行时、显式 Plan Mode、Docker 沙箱执行、沙箱执行前 command risk detector、基于 patch 的宿主机写回、JSONL 会话持久化、可选 SQLAlchemy/PostgreSQL 会话存储底座、provider usage token 统计、脱敏 trace 和审批审计存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
+`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、最小 FastAPI/SSE 服务入口、本地 Web 审批入口、Model Gateway 与 DeepSeek 模型适配器、事件驱动运行时、显式 Plan Mode、Docker 沙箱执行、沙箱执行前 command risk detector、基于 patch 的宿主机写回、默认 JSONL 会话持久化、可配置 SQLAlchemy/MySQL 会话存储、provider usage token 统计、脱敏 trace 和审批审计存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
 
-当前项目还不是完整企业级平台。它尚未实现认证授权、持久化审批队列、数据库存储运行时配置切换、生产级 Web UI、Milvus、Redis、MCP、Skills、Hooks、真实 memory 检索、模型辅助上下文摘要、多 agent 编排和 worktree 隔离。
+当前项目还不是完整企业级平台。它尚未实现认证授权、持久化审批队列、生产级 Web UI、Milvus、Redis、MCP、Skills、Hooks、真实 memory 检索、模型辅助上下文摘要、多 agent 编排和 worktree 隔离。
 
 ## 核心设计原则
 
@@ -217,8 +217,9 @@
 
 当前文件：
 
+- `factory.py`：根据 `AgentConfig` 在 JSONL 和 SQLAlchemy/MySQL session store 之间选择，并负责数据库 URL 脱敏错误。
 - `store.py`：JSONL session events、checkpoints、summaries、transcripts。
-- `postgres.py`：SQLAlchemy-backed session store，用于 PostgreSQL 部署和 repository contract tests。
+- `mysql.py`：SQLAlchemy-backed session store，用于 MySQL 部署和 repository contract tests。
 - `lock.py`：会话锁，防止同一 chat session 被并发写入。
 
 当前状态：
@@ -227,13 +228,15 @@
 - 保存脱敏 checkpoint。
 - 保存人类可读 transcript。
 - 保存会话摘要，包括运行次数、工具次数、provider usage 累计 token、当前上下文 token、上下文窗口占比和最近 compact 节省量。
-- `PostgresSessionStore` 实现与 JSONL store 相同的核心协议，事件、checkpoint、summary 和 transcript 行为有合同测试覆盖。
+- `MySqlSessionStore` 实现与 JSONL store 相同的核心协议，事件、checkpoint、summary 和 transcript 行为有合同测试覆盖。
+- 未配置数据库时 CLI/API 默认使用 JSONL；显式配置 `CODING_AGENT_DATABASE_URL` 或 CLI `--database-url` 后，`CodingAgent` 会通过统一 factory 使用 `MySqlSessionStore` 保存 session、checkpoint、summary 和 transcript。
+- MySQL engine 支持连接池大小、溢出连接数、连接超时、连接回收和 `pool_pre_ping` 配置；数据库 URL 中的用户名和密码不会出现在配置错误信息中。
 
 后续工作：
 
 - 将 run、turn、event 规范化存储。
 - 增加多用户归属。
-- 将 CLI/API 的 storage backend 选择配置化。
+- 将本地文件锁替换或扩展为 Redis/MySQL 协调机制，支持多 worker。
 
 ### `coding_agent.tracing`
 
@@ -271,7 +274,7 @@
 
 后续工作：
 
-- 增加 PostgreSQL memory metadata。
+- 增加 MySQL memory metadata。
 - 增加 Milvus 向量索引。
 - 增加 memory extraction 和人工审核。
 - 增加 memory recall 注入。
@@ -324,7 +327,7 @@
 
 - 当前没有认证授权，默认只适合本地可信回环地址。
 - 当前审批队列是进程内状态，服务重启后 pending approval 会丢失。
-- 当前审批审计是本地 JSONL 文件，还没有接入 PostgreSQL `approvals` 表或完整 audit log schema。
+- 当前审批审计是本地 JSONL 文件，还没有接入 MySQL `approvals` 表或完整 audit log schema。
 - 当前 active run registry 是进程内状态；多 worker 部署需要 Redis 或数据库锁。
 
 后续工作：
@@ -332,7 +335,7 @@
 - 增加认证和 CORS 配置。
 - 增加持久化 approval queue 和生产级审批页面。
 - 增加 WebSocket 事件流或保留 SSE 作为稳定协议。
-- 将 active run、审批和会话锁迁移到 Redis/PostgreSQL。
+- 将 active run、审批和会话锁迁移到 Redis/MySQL。
 
 ### `coding_agent.db`
 
@@ -346,15 +349,15 @@
 
 当前状态：
 
-- PostgreSQL 是目标生产数据库，合同测试使用 SQLite 执行同一套 SQLAlchemy schema 和 repository 行为。
-- JSONL 仍是 CLI/API 默认本地模式。
+- MySQL 是目标生产数据库，合同测试使用 SQLite 执行同一套 SQLAlchemy schema 和 repository 行为。
+- JSONL 仍是 CLI/API 默认本地模式；显式数据库 URL 会切换到 `MySqlSessionStore`。
 - 表结构已为后续 run 状态追踪、持久化审批队列、artifact 审计和 model usage 看板预留基础字段。
+- 生产环境应通过 Alembic 管理 schema；`database_create_schema` 只用于本地开发和自动化测试。
 
 后续工作：
 
-- 增加运行时配置入口，在本地 JSONL 和 PostgreSQL store 之间切换。
 - 增加 turns、tool_calls、patches 和 audit_logs 的更细粒度规范化表。
-- 增加 PostgreSQL 连接池、健康检查、迁移执行文档和部署配置。
+- 增加数据库健康检查和完整部署配置。
 
 ### `coding_agent.cli`
 
@@ -392,6 +395,6 @@ uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovid
 - `ruff check`：通过。
 - `mypy`：通过。
 - `mypy src`：通过。
-- `pytest`：95 passed，1 skipped。
+- `pytest`：118 passed，1 skipped。
 
 普通 `uv run pytest` 在 Codex 沙箱账户下可能失败，因为它可能尝试写入 `C:\Users\HP\AppData\Local\Temp\pytest-of-HP`。

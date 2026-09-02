@@ -10,10 +10,12 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, create_engine, event, inspect, select
+from sqlalchemy.dialects import mysql
+from sqlalchemy.schema import CreateTable
 
 from coding_agent.ai.contracts import ChatMessage, ToolCall
 from coding_agent.db import initialize_database, tables
-from coding_agent.sessions.postgres import PostgresSessionStore
+from coding_agent.sessions.mysql import MySqlSessionStore
 from coding_agent.sessions.store import (
     ConversationCheckpoint,
     JsonlSessionStore,
@@ -49,7 +51,7 @@ def _store_cases(tmp_path: Path) -> list[StoreCase]:
     database_path = tmp_path / "sessions.db"
     engine = _create_engine(database_path)
     initialize_database(engine)
-    sql_store = PostgresSessionStore(engine)
+    sql_store = MySqlSessionStore(engine)
     return [
         StoreCase(
             name="jsonl",
@@ -190,10 +192,10 @@ async def test_store_contract_summaries_and_transcripts(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_postgres_store_summary_update_preserves_children(tmp_path: Path) -> None:
-    engine = _create_engine(tmp_path / "postgres-contract.db")
+async def test_mysql_store_summary_update_preserves_children(tmp_path: Path) -> None:
+    engine = _create_engine(tmp_path / "mysql-contract.db")
     initialize_database(engine)
-    store = PostgresSessionStore(engine)
+    store = MySqlSessionStore(engine)
     session_id = "summary-update-preserves-children"
     try:
         await store.append(
@@ -248,7 +250,10 @@ def test_schema_contains_platform_storage_tables(tmp_path: Path) -> None:
         engine.dispose()
 
 
-def test_alembic_migration_creates_platform_storage_tables(tmp_path: Path) -> None:
+def test_alembic_migration_creates_platform_storage_tables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CODING_AGENT_DATABASE_URL", raising=False)
     database_path = tmp_path / "migration.db"
     project_root = Path(__file__).resolve().parents[1]
     config = Config(str(project_root / "alembic.ini"))
@@ -274,3 +279,37 @@ def test_alembic_migration_creates_platform_storage_tables(tmp_path: Path) -> No
         }.issubset(table_names)
     finally:
         engine.dispose()
+
+
+def test_alembic_migration_uses_database_url_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_path = tmp_path / "migration-env.db"
+    project_root = Path(__file__).resolve().parents[1]
+    monkeypatch.setenv(
+        "CODING_AGENT_DATABASE_URL", f"sqlite+pysqlite:///{database_path.as_posix()}"
+    )
+    config = Config(str(project_root / "alembic.ini"))
+    config.set_main_option("script_location", str(project_root / "migrations"))
+
+    command.upgrade(config, "head")
+
+    engine = _create_engine(database_path)
+    try:
+        table_names = set(inspect(engine).get_table_names())
+
+        assert "sessions" in table_names
+        assert "alembic_version" in table_names
+    finally:
+        engine.dispose()
+
+
+def test_schema_compiles_for_mysql_without_text_defaults() -> None:
+    dialect = mysql.dialect()
+    ddl = "\n".join(
+        str(CreateTable(table).compile(dialect=dialect)) for table in tables.schema_tables
+    )
+
+    assert "ENGINE=InnoDB" in ddl
+    assert "CHARSET=utf8mb4" in ddl
+    assert "TEXT NOT NULL DEFAULT" not in ddl

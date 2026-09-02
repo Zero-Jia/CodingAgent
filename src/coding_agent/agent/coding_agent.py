@@ -20,10 +20,11 @@ from coding_agent.sandbox.contracts import SandboxLimits
 from coding_agent.sandbox.docker import DockerSandboxExecutor
 from coding_agent.sandbox.patches import PatchRegistry
 from coding_agent.sandbox.snapshot import SnapshotService
+from coding_agent.sessions.factory import create_session_store
 from coding_agent.sessions.store import (
     ConversationCheckpoint,
-    JsonlSessionStore,
     SessionEvent,
+    SessionStore,
     SessionSummary,
 )
 from coding_agent.tools.builtin import (
@@ -290,13 +291,17 @@ class CodingAgent:
     """适用于 CLI、FastAPI、TUI 和 Worker 的稳定 Python API。"""
 
     def __init__(
-        self, config: AgentConfig, model: ModelAdapter, approval: ApprovalProvider | None = None
+        self,
+        config: AgentConfig,
+        model: ModelAdapter,
+        approval: ApprovalProvider | None = None,
+        sessions: SessionStore | None = None,
     ) -> None:
         self.config = config
         self.model = model
         self.approval = approval
         self.data_root = config.workspace / ".coding-agent"
-        self.sessions = JsonlSessionStore(self.data_root)
+        self.sessions = sessions or create_session_store(config, self.data_root)
         self.application_log = ApplicationLog(self.data_root)
         self.artifacts = JsonlArtifactStore(self.data_root)
 

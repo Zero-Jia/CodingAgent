@@ -32,7 +32,7 @@ uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovid
 
 结果：
 
-本轮新增 API 本地最小 Web 审批入口、进程内 approval registry 和脱敏 JSONL audit 后，验证结果如下。
+本轮将目标关系数据库替换为 MySQL，并修复 Alembic 只设置 `CODING_AGENT_DATABASE_URL` 时无法迁移的问题。新增/调整 MySQL session store、PyMySQL RSA 认证依赖、MySQL 连接参数、MySQL 兼容 DDL、Alembic URL 解析和配置测试后，验证结果如下。
 
 ```text
 uv --cache-dir .uv-cache run ruff check
@@ -41,41 +41,94 @@ All checks passed!
 
 ```text
 uv --cache-dir .uv-cache run mypy
-Success: no issues found in 48 source files
+Success: no issues found in 50 source files
 ```
 
 ```text
 uv --cache-dir .uv-cache run mypy src
-Success: no issues found in 48 source files
+Success: no issues found in 50 source files
 ```
 
-定向 API 审批测试：
+定向存储配置测试：
 
 ```text
-uv --cache-dir .uv-cache run pytest tests/test_api.py --basetemp .codex-test-tmp-api-approval -p no:cacheprovider
+uv --cache-dir .uv-cache run pytest tests/test_storage_config.py --basetemp .codex-test-tmp-mysql-config -p no:cacheprovider
+8 passed
+```
+
+数据库诊断 CLI 与配置测试：
+
+```text
+uv --cache-dir .uv-cache run pytest tests/test_cli.py tests/test_storage_config.py --basetemp .codex-test-tmp-db-check -p no:cacheprovider
 14 passed
 ```
 
-定向 Plan Mode/runtime 回归测试：
+```text
+uv --cache-dir .uv-cache run agent db-check --database-url "sqlite+pysqlite:///:memory:"
+状态：连接成功
+```
+
+定向 session store 合同测试：
 
 ```text
-uv --cache-dir .uv-cache run pytest tests/test_plan_mode.py tests/test_runtime.py --basetemp .codex-test-tmp-approval-runtime -p no:cacheprovider
-19 passed
+uv --cache-dir .uv-cache run pytest tests/test_session_store_contract.py --basetemp .codex-test-tmp-alembic-env -p no:cacheprovider
+8 passed
+```
+
+定向 API/CLI 装配回归测试：
+
+```text
+uv --cache-dir .uv-cache run pytest tests/test_api.py tests/test_cli.py --basetemp .codex-test-tmp-mysql-api-cli -p no:cacheprovider
+16 passed
 ```
 
 全量测试：
 
 ```text
-uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-approval-final -p no:cacheprovider
-108 passed, 1 skipped
+uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-db-check-final -p no:cacheprovider
+123 passed, 1 skipped
 ```
 
-本轮自动化测试仍不依赖真实 DeepSeek API，也不启动 Docker 或真实 PostgreSQL 服务。API 审批测试使用 fake model 覆盖 approve、reject、patch preview 脱敏、audit 写入、幂等决议、非法状态/ID、resolved 查询和 cancel 解挂。
+Alembic CLI 环境变量路径：
+
+```text
+CODING_AGENT_DATABASE_URL=sqlite+pysqlite:///... uv --cache-dir .uv-cache run alembic upgrade head
+Running upgrade  -> 0001_create_platform_storage
+```
+
+MySQL 8 认证依赖检查：
+
+```text
+uv --cache-dir .uv-cache run python -c "import cryptography, pymysql"
+cryptography 50.0.1 可导入
+```
+
+本机 MySQL root 连通性与真实迁移：
+
+```text
+CODING_AGENT_DATABASE_URL=mysql+pymysql://root:***@localhost:3306/coding_agent?charset=utf8mb4
+uv --cache-dir .uv-cache run agent db-check
+状态：连接成功
+当前用户：root@localhost
+MySQL/数据库版本：8.0.41
+```
+
+```text
+uv --cache-dir .uv-cache run alembic upgrade head
+Running upgrade  -> 0001_create_platform_storage
+```
+
+```text
+select version_num from alembic_version
+0001_create_platform_storage
+```
+
+本轮自动化测试仍不依赖真实 DeepSeek API，也不启动 Docker。数据库后端自动化测试使用 SQLAlchemy SQLite URL 覆盖同一 `MySqlSessionStore` 行为、API 装配、checkpoint、summary、events、transcript、Alembic 环境变量迁移和配置错误脱敏，并使用 SQLAlchemy MySQL dialect 编译测试覆盖 MySQL DDL 兼容性；另外已对本机 MySQL 8.0.41 执行只读连通性检查和 Alembic 真实迁移验证。
 
 历史验证摘要：
 
 ```text
-uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-postgres-final2 -p no:cacheprovider
+uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-sqlalchemy-final2 -p no:cacheprovider
 101 passed, 1 skipped
 ```
 

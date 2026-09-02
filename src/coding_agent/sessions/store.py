@@ -74,6 +74,7 @@ class SessionStore(Protocol):
     async def save_summary(self, summary: SessionSummary) -> None: ...
     async def list_summaries(self) -> list[SessionSummary]: ...
     async def append_transcript(self, session_id: str, content: str) -> None: ...
+    async def load_transcript(self, session_id: str) -> str: ...
 
 
 class JsonlSessionStore:
@@ -120,6 +121,12 @@ class JsonlSessionStore:
         path = self.root / "transcripts" / f"{session_id}.md"
         await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
         await asyncio.to_thread(_append, path, content)
+
+    async def load_transcript(self, session_id: str) -> str:
+        path = self.root / "transcripts" / f"{session_id}.md"
+        if not path.exists():
+            return ""
+        return await asyncio.to_thread(path.read_text, encoding="utf-8")
 
 
 def _append(path: Path, line: str) -> None:

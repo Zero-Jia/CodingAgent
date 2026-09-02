@@ -152,7 +152,7 @@
 
 - GitHub Actions 以外的完整 CI/CD 质量门禁。
 - RBAC、组织级 policy 和多租户隔离。
-- PostgreSQL 审计存储。
+- MySQL 审计存储。
 - 远程沙箱执行器。
 - Docker 镜像 digest pinning、SBOM 和漏洞扫描。
 - Web patch 审批界面。

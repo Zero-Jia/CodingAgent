@@ -37,7 +37,7 @@ def upgrade() -> None:
             server_default=sa.func.now(),
         ),
         sa.Column("last_status", sa.String(length=64), nullable=False, server_default="created"),
-        sa.Column("last_user_message_preview", sa.Text(), nullable=False, server_default=""),
+        sa.Column("last_user_message_preview", sa.Text(), nullable=False),
         sa.Column("message_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("run_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("tool_count", sa.Integer(), nullable=False, server_default="0"),
@@ -66,7 +66,9 @@ def upgrade() -> None:
         sa.Column("last_plan_status", sa.String(length=64), nullable=False, server_default=""),
         sa.Column("last_plan_id", sa.String(length=128), nullable=False, server_default=""),
         sa.Column("plan_revision_count", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("last_plan_failure", sa.Text(), nullable=False, server_default=""),
+        sa.Column("last_plan_failure", sa.Text(), nullable=False),
+        mysql_engine="InnoDB",
+        mysql_charset="utf8mb4",
     )
     op.create_table(
         "runs",
@@ -80,8 +82,10 @@ def upgrade() -> None:
             server_default=sa.func.now(),
         ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("last_error", sa.Text(), nullable=False, server_default=""),
+        sa.Column("last_error", sa.Text(), nullable=False),
         sa.ForeignKeyConstraint(["session_id"], ["sessions.session_id"], ondelete="CASCADE"),
+        mysql_engine="InnoDB",
+        mysql_charset="utf8mb4",
     )
     op.create_index("ix_runs_session_id", "runs", ["session_id"])
     op.create_table(
@@ -94,6 +98,8 @@ def upgrade() -> None:
         sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["session_id"], ["sessions.session_id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="CASCADE"),
+        mysql_engine="InnoDB",
+        mysql_charset="utf8mb4",
     )
     op.create_index("ix_session_events_session_id", "session_events", ["session_id"])
     op.create_index("ix_session_events_run_id", "session_events", ["run_id"])
@@ -108,11 +114,13 @@ def upgrade() -> None:
         sa.Column("messages", sa.JSON(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["session_id"], ["sessions.session_id"], ondelete="CASCADE"),
+        mysql_engine="InnoDB",
+        mysql_charset="utf8mb4",
     )
     op.create_table(
         "transcripts",
         sa.Column("session_id", sa.String(length=128), primary_key=True),
-        sa.Column("content", sa.Text(), nullable=False, server_default=""),
+        sa.Column("content", sa.Text(), nullable=False),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
@@ -120,6 +128,8 @@ def upgrade() -> None:
             server_default=sa.func.now(),
         ),
         sa.ForeignKeyConstraint(["session_id"], ["sessions.session_id"], ondelete="CASCADE"),
+        mysql_engine="InnoDB",
+        mysql_charset="utf8mb4",
     )
     op.create_table(
         "approvals",
@@ -138,6 +148,8 @@ def upgrade() -> None:
         sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["session_id"], ["sessions.session_id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="CASCADE"),
+        mysql_engine="InnoDB",
+        mysql_charset="utf8mb4",
     )
     op.create_index("ix_approvals_session_id", "approvals", ["session_id"])
     op.create_index("ix_approvals_run_id", "approvals", ["run_id"])
@@ -157,6 +169,8 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["session_id"], ["sessions.session_id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="CASCADE"),
+        mysql_engine="InnoDB",
+        mysql_charset="utf8mb4",
     )
     op.create_index("ix_artifacts_session_id", "artifacts", ["session_id"])
     op.create_index("ix_artifacts_run_id", "artifacts", ["run_id"])
@@ -177,6 +191,8 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["session_id"], ["sessions.session_id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="CASCADE"),
+        mysql_engine="InnoDB",
+        mysql_charset="utf8mb4",
     )
     op.create_index("ix_model_usage_session_id", "model_usage", ["session_id"])
     op.create_index("ix_model_usage_run_id", "model_usage", ["run_id"])

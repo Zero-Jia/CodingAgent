@@ -11,10 +11,12 @@ import typer
 from coding_agent.agent.coding_agent import ChatSession, CodingAgent
 from coding_agent.ai.gateway import ModelProviderError, create_model_adapter
 from coding_agent.config import AgentConfig
+from coding_agent.db import check_database_url, database_health_text
 from coding_agent.runtime.events import AgentEvent
 from coding_agent.runtime.loop import ApprovalProvider
+from coding_agent.sessions.factory import StorageConfigError, create_session_store
 from coding_agent.sessions.lock import SessionLockedError, acquire_session_lock
-from coding_agent.sessions.store import JsonlSessionStore
+from coding_agent.sessions.store import SessionEvent, SessionStore
 
 app = typer.Typer(help="安全优先的本地编程 Agent。", no_args_is_help=True)
 
@@ -77,6 +79,9 @@ def _build_agent(
     plan_mode: bool,
     non_interactive: bool,
     sandbox_image: str | None = None,
+    storage_backend: str | None = None,
+    database_url: str | None = None,
+    database_create_schema: bool = False,
 ) -> CodingAgent:
     overrides: dict[str, object] = {
         "allow_write": allow_write,
@@ -90,6 +95,12 @@ def _build_agent(
         overrides["model"] = model
     if sandbox_image is not None:
         overrides["sandbox_image"] = sandbox_image
+    if storage_backend is not None:
+        overrides["storage_backend"] = storage_backend
+    if database_url is not None:
+        overrides["database_url"] = database_url
+    if database_create_schema:
+        overrides["database_create_schema"] = True
     config = AgentConfig.from_environment(
         workspace,
         **overrides,
@@ -98,7 +109,55 @@ def _build_agent(
         adapter = create_model_adapter(config)
     except ModelProviderError as error:
         raise typer.BadParameter(str(error), param_hint="--provider") from error
-    return CodingAgent(config, adapter, None if non_interactive else TerminalApproval())
+    try:
+        return CodingAgent(config, adapter, None if non_interactive else TerminalApproval())
+    except StorageConfigError as error:
+        raise typer.BadParameter(str(error), param_hint="--database-url") from error
+
+
+def _build_session_store(
+    workspace: Path,
+    storage_backend: str | None,
+    database_url: str | None,
+    database_create_schema: bool,
+) -> SessionStore:
+    overrides: dict[str, object] = {}
+    if storage_backend is not None:
+        overrides["storage_backend"] = storage_backend
+    if database_url is not None:
+        overrides["database_url"] = database_url
+    if database_create_schema:
+        overrides["database_create_schema"] = True
+    config = AgentConfig.from_environment(workspace, **overrides)
+    try:
+        return create_session_store(config, config.workspace / ".coding-agent")
+    except StorageConfigError as error:
+        raise typer.BadParameter(str(error), param_hint="--database-url") from error
+
+
+@app.command("db-check")
+def db_check(
+    workspace: Annotated[Path, typer.Option("--workspace", exists=True, file_okay=False)] = Path(
+        "."
+    ),
+    database_url: Annotated[
+        str | None, typer.Option("--database-url", help="SQLAlchemy database URL to check.")
+    ] = None,
+) -> None:
+    """检查数据库 URL、认证和连通性。"""
+    overrides: dict[str, object] = {}
+    if database_url is not None:
+        overrides["database_url"] = database_url
+    config = AgentConfig.from_environment(workspace, **overrides)
+    if config.database_url is None:
+        raise typer.BadParameter(
+            "database URL is required. Set CODING_AGENT_DATABASE_URL or pass --database-url.",
+            param_hint="--database-url",
+        )
+    health = check_database_url(config.database_url.get_secret_value())
+    typer.echo(database_health_text(health))
+    if not health.ok:
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -114,6 +173,19 @@ def run(
     plan_mode: Annotated[bool, typer.Option("--plan")] = False,
     sandbox_image: Annotated[str | None, typer.Option("--sandbox-image")] = None,
     non_interactive: Annotated[bool, typer.Option("--non-interactive")] = False,
+    storage_backend: Annotated[
+        str | None, typer.Option("--storage", help="Session storage backend: jsonl or mysql.")
+    ] = None,
+    database_url: Annotated[
+        str | None, typer.Option("--database-url", help="SQLAlchemy database URL for sessions.")
+    ] = None,
+    database_create_schema: Annotated[
+        bool,
+        typer.Option(
+            "--database-create-schema",
+            help="Create database tables at startup for local development and tests.",
+        ),
+    ] = False,
 ) -> None:
     """执行一次任务。"""
     asyncio.run(
@@ -127,6 +199,9 @@ def run(
                 plan_mode,
                 non_interactive,
                 sandbox_image,
+                storage_backend,
+                database_url,
+                database_create_schema,
             ),
             task,
         )
@@ -147,6 +222,19 @@ def chat(
     non_interactive: Annotated[bool, typer.Option("--non-interactive")] = False,
     resume: Annotated[str | None, typer.Option("--resume")] = None,
     force_unlock: Annotated[bool, typer.Option("--force-unlock")] = False,
+    storage_backend: Annotated[
+        str | None, typer.Option("--storage", help="Session storage backend: jsonl or mysql.")
+    ] = None,
+    database_url: Annotated[
+        str | None, typer.Option("--database-url", help="SQLAlchemy database URL for sessions.")
+    ] = None,
+    database_create_schema: Annotated[
+        bool,
+        typer.Option(
+            "--database-create-schema",
+            help="Create database tables at startup for local development and tests.",
+        ),
+    ] = False,
 ) -> None:
     """启动独占的连续聊天会话。"""
     agent = _build_agent(
@@ -158,6 +246,9 @@ def chat(
         plan_mode,
         non_interactive,
         sandbox_image,
+        storage_backend,
+        database_url,
+        database_create_schema,
     )
     asyncio.run(_chat_loop(agent, resume, force_unlock))
 
@@ -395,11 +486,11 @@ async def _print_sessions(agent: CodingAgent) -> None:
 
 
 async def _print_history(agent: CodingAgent, session_id: str) -> None:
-    path = agent.data_root / "transcripts" / f"{session_id}.md"
-    if not path.exists():
+    transcript = await agent.sessions.load_transcript(session_id)
+    if not transcript:
         typer.echo("当前会话暂无可读记录。")
         return
-    typer.echo(await asyncio.to_thread(path.read_text, encoding="utf-8"))
+    typer.echo(transcript)
 
 
 @app.command()
@@ -408,9 +499,29 @@ def resume(
     workspace: Annotated[Path, typer.Option("--workspace", exists=True, file_okay=False)] = Path(
         "."
     ),
+    storage_backend: Annotated[
+        str | None, typer.Option("--storage", help="Session storage backend: jsonl or mysql.")
+    ] = None,
+    database_url: Annotated[
+        str | None, typer.Option("--database-url", help="SQLAlchemy database URL for sessions.")
+    ] = None,
+    database_create_schema: Annotated[
+        bool,
+        typer.Option(
+            "--database-create-schema",
+            help="Create database tables before reading sessions.",
+        ),
+    ] = False,
 ) -> None:
     """显示会话事件历史。"""
-    events = asyncio.run(JsonlSessionStore(workspace / ".coding-agent").load(session_id))
+    events = asyncio.run(
+        _load_events(
+            _build_session_store(
+                workspace, storage_backend, database_url, database_create_schema
+            ),
+            session_id,
+        )
+    )
     if not events:
         raise typer.Exit(code=1)
     for event in events:
@@ -423,9 +534,33 @@ def status(
     workspace: Annotated[Path, typer.Option("--workspace", exists=True, file_okay=False)] = Path(
         "."
     ),
+    storage_backend: Annotated[
+        str | None, typer.Option("--storage", help="Session storage backend: jsonl or mysql.")
+    ] = None,
+    database_url: Annotated[
+        str | None, typer.Option("--database-url", help="SQLAlchemy database URL for sessions.")
+    ] = None,
+    database_create_schema: Annotated[
+        bool,
+        typer.Option(
+            "--database-create-schema",
+            help="Create database tables before reading sessions.",
+        ),
+    ] = False,
 ) -> None:
     """显示会话最后一条事件。"""
-    events = asyncio.run(JsonlSessionStore(workspace / ".coding-agent").load(session_id))
+    events = asyncio.run(
+        _load_events(
+            _build_session_store(
+                workspace, storage_backend, database_url, database_create_schema
+            ),
+            session_id,
+        )
+    )
     if not events:
         raise typer.Exit(code=1)
     typer.echo(events[-1].model_dump_json())
+
+
+async def _load_events(store: SessionStore, session_id: str) -> list[SessionEvent]:
+    return await store.load(session_id)

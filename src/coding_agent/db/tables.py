@@ -27,7 +27,7 @@ sessions = Table(
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("last_status", String(64), nullable=False, default="created", server_default="created"),
-    Column("last_user_message_preview", Text, nullable=False, default="", server_default=""),
+    Column("last_user_message_preview", Text, nullable=False, default=""),
     Column("message_count", Integer, nullable=False, default=0, server_default="0"),
     Column("run_count", Integer, nullable=False, default=0, server_default="0"),
     Column("tool_count", Integer, nullable=False, default=0, server_default="0"),
@@ -55,7 +55,9 @@ sessions = Table(
     Column("last_plan_status", String(64), nullable=False, default="", server_default=""),
     Column("last_plan_id", String(128), nullable=False, default="", server_default=""),
     Column("plan_revision_count", Integer, nullable=False, default=0, server_default="0"),
-    Column("last_plan_failure", Text, nullable=False, default="", server_default=""),
+    Column("last_plan_failure", Text, nullable=False, default=""),
+    mysql_engine="InnoDB",
+    mysql_charset="utf8mb4",
 )
 
 runs = Table(
@@ -72,7 +74,9 @@ runs = Table(
     Column("status", String(64), nullable=False, default="running", server_default="running"),
     Column("started_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("completed_at", DateTime(timezone=True), nullable=True),
-    Column("last_error", Text, nullable=False, default="", server_default=""),
+    Column("last_error", Text, nullable=False, default=""),
+    mysql_engine="InnoDB",
+    mysql_charset="utf8mb4",
 )
 
 session_events = Table(
@@ -96,6 +100,8 @@ session_events = Table(
     Column("event_type", String(128), nullable=False, index=True),
     Column("payload", JSON, nullable=False),
     Column("timestamp", DateTime(timezone=True), nullable=False),
+    mysql_engine="InnoDB",
+    mysql_charset="utf8mb4",
 )
 
 checkpoints = Table(
@@ -113,6 +119,8 @@ checkpoints = Table(
     Column("model_name", String(256), nullable=False),
     Column("messages", JSON, nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    mysql_engine="InnoDB",
+    mysql_charset="utf8mb4",
 )
 
 transcripts = Table(
@@ -126,6 +134,8 @@ transcripts = Table(
     ),
     Column("content", Text, nullable=False, default=""),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    mysql_engine="InnoDB",
+    mysql_charset="utf8mb4",
 )
 
 approvals = Table(
@@ -151,6 +161,8 @@ approvals = Table(
     Column("details", JSON, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("resolved_at", DateTime(timezone=True), nullable=True),
+    mysql_engine="InnoDB",
+    mysql_charset="utf8mb4",
 )
 
 artifacts = Table(
@@ -175,6 +187,8 @@ artifacts = Table(
     Column("sha256", String(64), nullable=False),
     Column("metadata", JSON, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    mysql_engine="InnoDB",
+    mysql_charset="utf8mb4",
 )
 
 model_usage = Table(
@@ -200,6 +214,8 @@ model_usage = Table(
     Column("total_tokens", Integer, nullable=False, default=0, server_default="0"),
     Column("estimated_cost_usd", Float, nullable=False, default=0.0, server_default="0"),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    mysql_engine="InnoDB",
+    mysql_charset="utf8mb4",
 )
 
 schema_tables = (

@@ -46,7 +46,7 @@ class ApprovalAuditStore(Protocol):
 class JsonlApprovalAuditStore:
     """Append-only local approval audit log.
 
-    This is deliberately separate from the future PostgreSQL approval queue.
+    This is deliberately separate from the future MySQL approval queue.
     The API can be useful in local mode today while keeping the storage boundary
     replaceable for production deployments.
     """

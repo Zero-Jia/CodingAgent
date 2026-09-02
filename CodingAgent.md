@@ -2,7 +2,7 @@
 
 本文档描述的是以当前 `CodingAgent` 项目为基础，参考 `D:\Software\MewCode` 的完整 agent 运行时能力，并按照企业级 coding agent 的工程标准继续演进后的目标形态。
 
-当前项目已经具备一个安全优先的本地 coding agent 内核：Python 包结构清晰，支持 DeepSeek 模型调用、事件驱动运行时、只读工具、Docker 无网络沙箱、补丁注册与审批回写、JSONL 会话与追踪存储、SQLAlchemy/PostgreSQL 会话存储底座、脱敏 artifact、基础测试和严格类型检查。后续完整形态不是简单扩展一个 CLI 工具，而是将其升级为一个可审计、可扩展、可部署、支持团队协作和多模型接入的企业级 agent 平台。
+当前项目已经具备一个安全优先的本地 coding agent 内核：Python 包结构清晰，支持 DeepSeek 模型调用、事件驱动运行时、只读工具、Docker 无网络沙箱、补丁注册与审批回写、默认 JSONL 会话与追踪存储、可配置 SQLAlchemy/MySQL 会话存储、脱敏 artifact、基础测试和严格类型检查。后续完整形态不是简单扩展一个 CLI 工具，而是将其升级为一个可审计、可扩展、可部署、支持团队协作和多模型接入的企业级 agent 平台。
 
 ## 1. 项目整体定位
 
@@ -33,7 +33,7 @@
 - `sandbox`：Docker 沙箱契约、快照生成、一次性容器执行、patch 注册和校验。
 - `policy`：工具权限、路径边界、写入审批和 shell 审批。
 - `workspace`：工作区检查、文件搜索、敏感路径过滤。
-- `sessions`：JSONL 会话事件、checkpoint、transcript、会话索引、PostgreSQL store 和独占锁。
+- `sessions`：JSONL 会话事件、checkpoint、transcript、会话索引、MySQL store 和独占锁。
 - `db`：SQLAlchemy Core schema、engine helper 和 Alembic migration。
 - `tracing`：结构化 trace、artifact、应用日志和脱敏。
 - `memory`：记忆协议预留，目前是 Noop 实现。
@@ -190,9 +190,9 @@ tool call/result 配对保护。CLI 已能基于 provider usage 显示 session �
 
 ### 4.8 数据层不足
 
-当前默认使用本地 JSONL 文件，适合 MVP；项目已提供 SQLAlchemy/PostgreSQL 会话存储底座和 Alembic 初始迁移，但还缺少运行时配置切换、连接池部署约定和完整审计数据模型。最终需要：
+当前默认使用本地 JSONL 文件，适合 MVP；项目已提供 SQLAlchemy/MySQL 会话存储底座、Alembic 初始迁移和 CLI/API 运行时配置切换。仍缺少分布式锁、持久化审批队列和完整审计数据模型。最终需要：
 
-- PostgreSQL 存储结构化业务数据
+- MySQL 存储结构化业务数据
 - Milvus 存储代码和记忆向量
 - Redis 存储锁、缓存、队列状态和 pub/sub
 - 对象存储保存 artifact、trace 附件、沙箱输出
@@ -237,14 +237,14 @@ Python 作为主体语言，负责 agent runtime、模型适配、工具协议�
 
 ### 5.3 数据与存储
 
-- PostgreSQL：会话、运行、事件、审批、用户、项目、权限、审计日志。
+- MySQL：会话、运行、事件、审批、用户、项目、权限、审计日志。
 - Milvus：代码语义索引、长期记忆、项目知识、历史任务向量。
 - Redis：任务队列、分布式锁、短期缓存、WebSocket pub/sub。
 - S3 / MinIO：sandbox 输出、trace artifact、报告、补丁包。
 - Alembic：数据库 schema 迁移。
 - SQLAlchemy：数据访问层。
 
-本地 JSONL 存储会保留为开发模式和单机模式，但企业部署默认使用 PostgreSQL。
+本地 JSONL 存储会保留为开发模式和单机模式，但企业部署默认使用 MySQL。
 
 ### 5.4 沙箱与执行环境
 
@@ -269,7 +269,7 @@ Python 作为主体语言，负责 agent runtime、模型适配、工具协议�
 - 代码 chunking
 - embedding model
 - Milvus vector search
-- PostgreSQL metadata filter
+- MySQL metadata filter
 
 最终的代码检索不只依赖全文搜索，而是结合符号、文件结构、调用关系、向量召回和最近修改上下文。
 
@@ -477,7 +477,7 @@ Agent Runtime 是项目的核心执行循环。
 数据流：
 
 1. 从会话、trace、用户反馈和人工标注中提取候选记忆。
-2. 人工或规则审核后写入 PostgreSQL。
+2. 人工或规则审核后写入 MySQL。
 3. 生成 embedding 并写入 Milvus。
 4. 任务开始时根据 query、workspace、文件、语言和历史任务召回。
 5. 将高置信度记忆注入系统上下文。
@@ -500,7 +500,7 @@ Agent Runtime 是项目的核心执行循环。
 - import / call graph
 - embedding 生成
 - Milvus 语义检索
-- PostgreSQL 元数据过滤
+- MySQL 元数据过滤
 
 这样 agent 不需要每次都盲目全文搜索，而是能先定位相关模块和符号。
 
@@ -551,7 +551,7 @@ Agent Runtime 是项目的核心执行循环。
 - cost usage
 - error event
 
-本地开发可继续用 JSONL，企业部署写入 PostgreSQL，并将大对象写入 S3/MinIO。
+本地开发可继续用 JSONL，企业部署写入 MySQL，并将大对象写入 S3/MinIO。
 
 ### 6.11 API and UI
 
@@ -666,7 +666,7 @@ Hooks 可用于自动安全扫描、通知、CI 触发、审计上报和质量�
 
 ## 7. 推荐数据库设计
 
-PostgreSQL 中建议包含以下核心表：
+MySQL 中建议包含以下核心表：
 
 - `users`
 - `organizations`
@@ -718,7 +718,7 @@ Redis 中建议保存：
    通过 token budget、compact、artifact、memory recall 让长任务持续运行。
 
 5. **向量记忆和代码语义索引**
-   用 PostgreSQL 管结构化元数据，用 Milvus 管向量召回，实现项目级长期知识。
+   用 MySQL 管结构化元数据，用 Milvus 管向量召回，实现项目级长期知识。
 
 6. **多 agent 协作**
    planner、coder、reviewer、verifier 分工协作，并通过 worktree 隔离并行修改。
@@ -770,7 +770,7 @@ Redis 中建议保存：
 
 - FastAPI 服务。
 - WebSocket/SSE 事件流。
-- PostgreSQL 运行时接入和数据层扩展。
+- MySQL 数据层扩展。
 - Redis 任务队列和锁。
 - Web 审批页。
 - MCP 工具接入。
@@ -867,7 +867,7 @@ src/coding_agent/
     consolidation.py
   sessions/
     store.py
-    postgres.py
+    mysql.py
     lock.py
   tracing/
     store.py
@@ -893,10 +893,10 @@ src/coding_agent/
 
 `CodingAgent` 的最终形态不是一个简单的“命令行套壳大模型”，而是一个围绕安全执行、受控写回、上下文管理、可观测性、插件生态和多 agent 协作构建的工程系统。
 
-当前项目已经有了最重要的底座：安全沙箱、补丁审批和基础数据库存储。后续最应该优先补的是工程化质量门禁、多 provider、上下文压缩、真实 memory、MCP/Skills/Hooks、PostgreSQL 运行时接入、Milvus 数据层、Web 审批和多 agent worktree 隔离。
+当前项目已经有了最重要的底座：安全沙箱、补丁审批和基础数据库存储。后续最应该优先补的是工程化质量门禁、多 provider、上下文压缩、真实 memory、MCP/Skills/Hooks、MySQL 数据层扩展、Milvus 数据层、Web 审批和多 agent worktree 隔离。
 
 如果用于秋招面试，建议把项目主线讲成：
 
 > 我没有直接做一个能执行命令的 agent，而是先解决 coding agent 在企业落地时最关键的安全问题：模型如何在不直接接触宿主机写权限的前提下完成代码修改、验证和回写。然后在这个安全内核之上扩展模型网关、上下文管理、记忆系统、工具生态、多 agent 协作和平台化部署。
 
-这条主线清晰、工程含量高，也能自然展开到 Python、Docker、FastAPI、PostgreSQL、Milvus、Redis、MCP、OpenTelemetry、CI/CD 和安全治理等技术点。
+这条主线清晰、工程含量高，也能自然展开到 Python、Docker、FastAPI、MySQL、Milvus、Redis、MCP、OpenTelemetry、CI/CD 和安全治理等技术点。

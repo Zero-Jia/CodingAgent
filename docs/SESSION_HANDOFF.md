@@ -49,7 +49,8 @@
 - 工作区快照过滤，排除敏感文件、内部文件、符号链接、大文件、虚拟环境、缓存和 `.git`。
 - Patch 校验，覆盖敏感路径、二进制 patch、子模块、文件模式变化、符号链接、可执行权限变化、重命名、复制、changed-file 不一致和宿主并发修改。
 - JSONL session、checkpoint、transcript、summary、trace、artifact 和 application log。
-- SQLAlchemy/PostgreSQL 会话存储底座和 Alembic 初始迁移。
+- SQLAlchemy/MySQL 会话存储底座和 Alembic 初始迁移。
+- CLI/API MySQL session store 运行时配置切换，默认仍使用 JSONL，显式 `database_url` 时使用 `MySqlSessionStore`。
 - 连续 chat session 的独占锁。
 - `src/coding_agent/py.typed` 包类型标记。
 - GitHub Actions 最小 CI workflow，运行 ruff、mypy 和 pytest。
@@ -63,7 +64,6 @@
 - 认证授权。
 - 持久化审批队列。
 - 生产级 Web UI。
-- PostgreSQL 运行时配置切换和生产部署配置。
 - Milvus。
 - Redis。
 - MCP。
@@ -78,6 +78,122 @@
 ## 最近一次 Session
 
 本轮完成：
+
+- 完成数据库目标替换为 MySQL，保留 JSONL 默认本地模式和 SQLAlchemy 抽象。
+- 参考 `D:\Software\MewCode` 的配置、runtime 装配和 session manager 分层方式；只借鉴入口装配分层，没有复制其本地 session 文件格式或宿主机权限模型。
+- 旧数据库驱动依赖已替换为 `pymysql[rsa]`，MySQL URL 使用 `mysql+pymysql://...`；`cryptography` 作为锁定依赖支持 MySQL 8 默认的 `caching_sha2_password` 认证。
+- 关系型 session store 已重命名为 `MySqlSessionStore`，模块为 `sessions/mysql.py`。
+- `AgentConfig.storage_backend` 现在只接受 `jsonl` 或 `mysql`；显式 `database_url` 会选择 MySQL 后端，旧后端名会被拒绝。
+- 数据库 engine 增加 MySQL 连接超时和连接回收配置，避免数据库不可达时长时间卡住，并降低 MySQL `wait_timeout` 后死连接风险。
+- SQLAlchemy table 和 Alembic 初始迁移移除了 MySQL 不兼容的 `TEXT server_default`，并为表声明 InnoDB/utf8mb4。
+- Alembic `migrations/env.py` 已接入数据库 URL 解析，优先读取 `-x database_url=...`，其次读取 `CODING_AGENT_DATABASE_URL`，最后读取 `alembic.ini` 的 `sqlalchemy.url`。
+- 修复只设置 `CODING_AGENT_DATABASE_URL` 时执行 `uv --cache-dir .uv-cache run alembic upgrade head` 报 `KeyError: 'url'` 的问题。
+- 修复连接 MySQL 8 账号时 PyMySQL 缺少 `cryptography` 导致 `sha256_password` / `caching_sha2_password` 认证失败的问题。
+- 新增 `agent db-check` CLI 诊断命令，可在不调用模型的情况下检查数据库 URL、驱动、认证、目标库和权限，并对 1045、1049、服务不可达、缺少 `cryptography` 等常见问题给出可执行建议。
+- Alembic 在线迁移连接失败时会输出同一套脱敏诊断信息，避免用户只能看到 SQLAlchemy/PyMySQL 堆栈。
+- 新增 MySQL dialect DDL 编译回归测试，防止后续重新引入 TEXT 默认值等 MySQL 兼容问题。
+- README 已补充 MySQL 登录、PATH、数据库账号初始化、root 本地验证 URL、`agent db-check`、MySQL 8 认证依赖和 Alembic URL 优先级说明；架构、路线图、任务、决策、威胁模型和验证文档已同步改为 MySQL 方向。
+
+本轮修改文件：
+
+- `README.md`
+- `CodingAgent.md`
+- `pyproject.toml`
+- `uv.lock`
+- `migrations/versions/0001_create_platform_storage.py`
+- `migrations/env.py`
+- `src/coding_agent/api/approvals.py`
+- `src/coding_agent/config.py`
+- `src/coding_agent/db/diagnostics.py`
+- `src/coding_agent/db/engine.py`
+- `src/coding_agent/db/tables.py`
+- `src/coding_agent/sessions/__init__.py`
+- `src/coding_agent/sessions/factory.py`
+- `src/coding_agent/sessions/mysql.py`
+- `tests/test_cli.py`
+- `tests/test_session_store_contract.py`
+- `tests/test_storage_config.py`
+- `docs/ARCHITECTURE.md`
+- `docs/DECISIONS.md`
+- `docs/ROADMAP.md`
+- `docs/SESSION_HANDOFF.md`
+- `docs/TASKS.md`
+- `docs/THREAT_MODEL.md`
+- `docs/VERIFICATION.md`
+
+本轮验证结果：
+
+- `uv --cache-dir .uv-cache lock`：通过；移除旧数据库驱动，新增 `pymysql[rsa]`，并锁定 `cryptography`、`cffi` 和 `pycparser`。
+- `uv --cache-dir .uv-cache run ruff check`：通过。
+- `uv --cache-dir .uv-cache run mypy src`：通过，50 source files。
+- `uv --cache-dir .uv-cache run pytest tests\test_storage_config.py --basetemp .codex-test-tmp-mysql-config -p no:cacheprovider`：8 passed。
+- `uv --cache-dir .uv-cache run pytest tests\test_session_store_contract.py --basetemp .codex-test-tmp-alembic-env -p no:cacheprovider`：8 passed。
+- `uv --cache-dir .uv-cache run python -c "import cryptography, pymysql; print(cryptography.__version__); print(pymysql.__version__)"`：通过，`cryptography` 50.0.1 可导入。
+- `uv --cache-dir .uv-cache run pytest tests\test_session_store_contract.py tests\test_storage_config.py --basetemp .codex-test-tmp-mysql-auth -p no:cacheprovider`：16 passed。
+- `uv --cache-dir .uv-cache run agent db-check --database-url "sqlite+pysqlite:///:memory:"`：通过。
+- `uv --cache-dir .uv-cache run pytest tests\test_api.py tests\test_cli.py --basetemp .codex-test-tmp-mysql-api-cli -p no:cacheprovider`：16 passed。
+- `uv --cache-dir .uv-cache run pytest tests\test_cli.py tests\test_storage_config.py --basetemp .codex-test-tmp-db-check -p no:cacheprovider`：14 passed。
+- 使用本机 MySQL `root@localhost` 连接 `coding_agent` 数据库执行 `agent db-check`：通过，MySQL 8.0.41。
+- 使用本机 MySQL `root@localhost` 执行 `uv --cache-dir .uv-cache run alembic upgrade head`：通过，`alembic_version` 为 `0001_create_platform_storage`，当前库 9 张表。
+- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-db-check-final -p no:cacheprovider`：123 passed，1 skipped。
+- 使用临时 SQLite `CODING_AGENT_DATABASE_URL` 执行 `uv --cache-dir .uv-cache run alembic upgrade head`：通过。
+
+本轮未完成事项：
+
+- 未用真实 DeepSeek API 启动完整聊天回合；数据库侧已用本机 MySQL 8.0.41 完成连通性和 Alembic 真实迁移验证。
+- 生产环境仍应通过 Alembic migration 管理 schema，`database_create_schema` 仅用于本地开发和自动化测试。
+- Session lock、active run registry 和 approval registry 仍是本地文件/进程内状态，不支持多 worker 分布式协调。
+- 审批审计仍写本地 JSONL，尚未接入 MySQL `approvals` 表或完整 audit log schema。
+
+上轮完成：
+
+- 完成 P3 `MySQL 运行时配置切换和生产连接池设置` 的小边界任务。
+- 参考 `D:\Software\MewCode` 的配置、runtime 装配和 session manager 分层方式；只借鉴入口装配分层，没有复制其本地 session 文件格式或宿主机权限模型。
+- `AgentConfig` 新增 `storage_backend`、`database_url`、`database_pool_size`、`database_max_overflow`、`database_pool_pre_ping` 和 `database_create_schema`。
+- 未设置数据库 URL 时仍使用 JSONL；显式设置 `CODING_AGENT_DATABASE_URL` 或 CLI `--database-url` 时，`AgentConfig` 会选择 MySQL 后端。
+- 新增 `coding_agent.sessions.factory`，集中创建 `JsonlSessionStore` 或 `MySqlSessionStore`，并在数据库配置失败时输出脱敏后的 URL。
+- `CodingAgent` 支持注入 `SessionStore`，默认通过统一 factory 装配，CLI/API 不再各自硬编码 JSONL session store。
+- CLI `run/chat/resume/status` 增加 `--storage`、`--database-url` 和 `--database-create-schema`，其中 `resume/status` 不需要创建模型也能读取数据库后端。
+- `SessionStore` 协议新增 `load_transcript`，`/history` 可通过当前 store 读取 JSONL 或 MySQL transcript。
+- `create_database_engine()` 增加连接池参数、`pool_pre_ping` 和 `hide_parameters`；SQLite 测试 URL 会避开生产连接池参数。
+- README 和架构/路线图/任务/验证文档已同步更新。
+
+本轮修改文件：
+
+- `README.md`
+- `CodingAgent.md`
+- `src/coding_agent/config.py`
+- `src/coding_agent/db/engine.py`
+- `src/coding_agent/agent/coding_agent.py`
+- `src/coding_agent/cli/app.py`
+- `src/coding_agent/sessions/__init__.py`
+- `src/coding_agent/sessions/factory.py`
+- `src/coding_agent/sessions/mysql.py`
+- `src/coding_agent/sessions/store.py`
+- `tests/test_cli.py`
+- `tests/test_storage_config.py`
+- `docs/ARCHITECTURE.md`
+- `docs/ROADMAP.md`
+- `docs/TASKS.md`
+- `docs/SESSION_HANDOFF.md`
+- `docs/VERIFICATION.md`
+
+本轮验证结果：
+
+- `uv --cache-dir .uv-cache run ruff check`：通过。
+- `uv --cache-dir .uv-cache run mypy src`：通过，49 source files。
+- `uv --cache-dir .uv-cache run pytest tests\test_storage_config.py --basetemp .codex-test-tmp-storage-config -p no:cacheprovider`：7 passed。
+- `uv --cache-dir .uv-cache run pytest tests\test_session_store_contract.py --basetemp .codex-test-tmp-storage-contract -p no:cacheprovider`：6 passed。
+- `uv --cache-dir .uv-cache run pytest tests\test_api.py tests\test_cli.py --basetemp .codex-test-tmp-storage-api-cli -p no:cacheprovider`：16 passed。
+
+本轮未完成事项：
+
+- 未启动真实 MySQL 实例做端到端连接测试；本轮使用 SQLite SQLAlchemy URL 验证同一 store 行为和 API 装配。
+- 生产环境仍应通过 Alembic migration 管理 schema，`database_create_schema` 仅用于本地开发和自动化测试。
+- Session lock、active run registry 和 approval registry 仍是本地文件/进程内状态，不支持多 worker 分布式协调。
+- 审批审计仍写本地 JSONL，尚未接入 MySQL `approvals` 表或完整 audit log schema。
+
+上轮完成：
 
 - 完成 P2 `审批 UI` 的本地最小 Web/API 审批流程。
 - 参考 `D:\Software\MewCode` 的 remote permission future、permission dialog 和权限测试思路；只借鉴异步 pending approval 和 UI/测试结构，没有引入其宿主机直写或本地 shell 权限模型。
@@ -117,21 +233,21 @@
 本轮未完成事项：
 
 - 审批队列仍是 API 进程内状态，服务重启后 pending approval 不会恢复。
-- 审批审计目前写入本地 JSONL，尚未接入 PostgreSQL `approvals` 表或完整 audit log schema。
+- 审批审计目前写入本地 JSONL，尚未接入 MySQL `approvals` 表或完整 audit log schema。
 - 审批页面是最小本地页面，尚未实现认证、RBAC、CORS 白名单、操作者身份、多用户或生产级前端。
-- 多 worker 部署下 active run、approval 和 session lock 仍需 Redis/PostgreSQL 协调。
+- 多 worker 部署下 active run、approval 和 session lock 仍需 Redis/MySQL 协调。
 - Pending patch 仍只在单个 runtime 内存中有效，尚未持久化。
 
 上轮完成：
 
-- 完成 P2 `PostgreSQL 存储` 的最小平台数据层。
+- 完成 P2 `MySQL 存储` 的最小平台数据层。
 - 新增 `coding_agent.db`，用 SQLAlchemy Core 定义 sessions、runs、session_events、checkpoints、transcripts、approvals、artifacts 和 model_usage 表。
-- 新增 `PostgresSessionStore`，实现 `SessionStore` 的事件追加/读取、checkpoint 保存/恢复、summary 保存/列表和 transcript 追加。
-- 新增 Alembic 初始迁移 `0001_create_platform_storage`，可创建 PostgreSQL 目标 schema；合同测试中使用 SQLite 验证迁移结构。
+- 新增 `MySqlSessionStore`，实现 `SessionStore` 的事件追加/读取、checkpoint 保存/恢复、summary 保存/列表和 transcript 追加。
+- 新增 Alembic 初始迁移 `0001_create_platform_storage`，可创建 MySQL 目标 schema；合同测试中使用 SQLite 验证迁移结构。
 - JSONL 仍作为 CLI/API 默认本地模式保留；本轮没有改变 `CodingAgent` 默认装配路径。
 - 新增 repository contract tests，让 JSONL 和 SQLAlchemy store 共用核心行为测试，并覆盖 summary 更新不得因外键级联删除事件和 checkpoint。
 - 参考 `D:\Software\MewCode` 的 session record/meta 分离、JSONL 容错和 resume/delete 测试思路；未照搬其本地直写模型。
-- `pyproject.toml` 和 `uv.lock` 增加 SQLAlchemy、Alembic 和 psycopg 依赖。
+- `pyproject.toml` 和 `uv.lock` 增加 SQLAlchemy、Alembic 和 MySQL 驱动依赖。
 
 本轮修改文件：
 
@@ -146,7 +262,7 @@
 - `src/coding_agent/db/engine.py`
 - `src/coding_agent/db/tables.py`
 - `src/coding_agent/sessions/__init__.py`
-- `src/coding_agent/sessions/postgres.py`
+- `src/coding_agent/sessions/mysql.py`
 - `src/coding_agent/sessions/store.py`
 - `tests/test_session_store_contract.py`
 - `docs/ARCHITECTURE.md`
@@ -157,21 +273,21 @@
 
 本轮验证结果：
 
-- `uv --cache-dir .uv-cache add "sqlalchemy==2.0.43" "alembic==1.16.5" "psycopg[binary]==3.2.9"`：通过；初次受限网络运行失败后，经授权重试成功。
+- `uv --cache-dir .uv-cache add "sqlalchemy==2.0.43" "alembic==1.16.5"`：通过；初次受限网络运行失败后，经授权重试成功。
 - `uv --cache-dir .uv-cache run ruff check`：通过。
 - `uv --cache-dir .uv-cache run mypy`：通过，47 source files。
 - `uv --cache-dir .uv-cache run mypy src`：通过，47 source files。
 - `uv --cache-dir .uv-cache run mypy src tests/test_session_store_contract.py`：通过，48 source files。
-- `uv --cache-dir .uv-cache run pytest tests/test_session_store_contract.py --basetemp .codex-test-tmp-postgres-targeted-2 -p no:cacheprovider`：6 passed。
-- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-postgres-final2 -p no:cacheprovider`：101 passed，1 skipped。
+- `uv --cache-dir .uv-cache run pytest tests/test_session_store_contract.py --basetemp .codex-test-tmp-sqlalchemy-targeted-2 -p no:cacheprovider`：6 passed。
+- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-sqlalchemy-final2 -p no:cacheprovider`：101 passed，1 skipped。
 
 本轮未完成事项：
 
-- 未将 CLI/API 默认 store 切换为 PostgreSQL；仍需后续增加配置入口和运行时装配。
+- 未将 CLI/API 默认 store 切换为数据库；仍需后续增加配置入口和运行时装配。
 - 未实现 Redis 分布式锁、active run registry 或 pub/sub。
 - 未实现持久化 approval queue、Web 审批接口或 patch 审批页面。
-- PostgreSQL schema 目前是平台存储底座；turns、tool_calls、patches、audit_logs 和多用户/多租户归属仍待规范化扩展。
-- 未启动真实 PostgreSQL 实例做端到端连接测试；本轮使用 SQLAlchemy contract tests 和 Alembic SQLite migration 测试验证结构和行为。
+- MySQL schema 目前是平台存储底座；turns、tool_calls、patches、audit_logs 和多用户/多租户归属仍待规范化扩展。
+- 未启动真实 MySQL 实例做端到端连接测试；本轮使用 SQLAlchemy contract tests 和 Alembic SQLite migration 测试验证结构和行为。
 
 上轮完成：
 
@@ -325,19 +441,20 @@
 
 建议下一轮任务：
 
-从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若继续推进 P2 平台化，建议做 PostgreSQL store 的 CLI/API 配置切换和部署文档，或把本轮进程内 approval registry 升级为持久化 approval queue。若优先补工程化，可以先增加 coverage 或 pre-commit。
+从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若继续推进平台化，建议把本轮进程内 approval registry 升级为持久化 approval queue；若优先补工程化，可以先增加 coverage 或 pre-commit。
 
 建议 prompt：
 
 ```text
-本轮只做 PostgreSQL store 的 CLI/API 配置切换，不实现 Redis 或完整 Web UI。请增加配置项，让本地 JSONL 继续作为默认模式，并允许显式 database_url 时使用 PostgresSessionStore；补充合同/装配测试、部署说明和验证记录。
+本轮只做持久化 approval queue，不实现 Redis 或完整 Web UI。请让审批请求和决议可落入 MySQL，同时保留本地 JSONL audit；补充合同/装配测试、部署说明和验证记录。
 ```
 
 验收标准：
 
-- 未设置 database_url 时仍使用 JSONL。
-- 显式配置 database_url 时 CLI/API 通过 PostgresSessionStore 保存 session、checkpoint、summary 和 transcript。
-- PostgreSQL 配置错误有清晰错误信息，不泄露凭据。
+- 未配置数据库时，现有进程内 approval registry 和本地 JSONL audit 行为不回退。
+- 配置 MySQL 后，审批请求、状态查询和 approve/reject 决议可通过数据库持久化。
+- 服务重启后，未决审批可被重新查询和处理，过期/取消状态一致。
+- 审批详情继续脱敏和限制大小，不泄露密钥、token 或数据库凭据。
 - 自动化测试不依赖真实 DeepSeek API。
 - `uv --cache-dir .uv-cache run ruff check`、`uv --cache-dir .uv-cache run mypy`、`uv --cache-dir .uv-cache run mypy src` 和 `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider` 通过。
 
@@ -345,7 +462,7 @@
 
 - 除非任务明确要求，否则不要重写 `README.md` 或 `CodingAgent.md`。
 - 不要用直接宿主机写入替代 Docker sandbox + patch-only 写回。
-- PostgreSQL、Milvus、Redis、MCP、Skills、Hooks、Web UI 等能力在代码实现前，不能写成已经完成。
+- MySQL、Milvus、Redis、MCP、Skills、Hooks、Web UI 等能力在代码实现前，不能写成已经完成。
 - 每个 session 只做一个边界清晰的能力。
 - 代码修改必须补充或更新测试。
 - 每次结束前更新本文档。

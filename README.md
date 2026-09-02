@@ -81,6 +81,87 @@ $env:CODING_AGENT_SANDBOX_IMAGE = "coding-agent-sandbox:python-3.12"
 
 DeepSeek 适配器使用兼容 OpenAI 的 Chat Completions SSE 协议。所有 Agent 运行均使用真实模型配置。
 
+## 存储配置
+
+默认情况下，CLI 和 API 会继续把 session、checkpoint、summary 和 transcript 写入工作区内的 `.coding-agent/` JSONL 文件，适合本地开发和单机使用。
+
+如果本机已经安装 MySQL，但 PowerShell 提示 `mysql` 不是可识别命令，通常只是 MySQL 客户端没有加入 `PATH`。可以先用完整路径进入 MySQL：
+
+```powershell
+& "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -u root -p
+```
+
+也可以只在当前 PowerShell 会话中临时加入 PATH：
+
+```powershell
+$env:Path += ";C:\Program Files\MySQL\MySQL Server 8.0\bin"
+mysql -u root -p
+```
+
+输入 root 密码后，看到 `mysql>` 表示已经进入数据库。首次使用本项目的 MySQL 模式时，可以创建独立数据库和账号：
+
+```sql
+CREATE DATABASE coding_agent CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'coding_agent'@'localhost' IDENTIFIED BY '<app-password>';
+GRANT ALL PRIVILEGES ON coding_agent.* TO 'coding_agent'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+如果账号已存在，可只执行 `CREATE DATABASE` 和 `GRANT`。如果 MySQL 服务未启动，先在 Windows 服务中启动 `MySQL80`，或用管理员 PowerShell 执行 `Start-Service MySQL80`。
+
+显式配置数据库 URL 后，运行时会切换为 SQLAlchemy/MySQL 会话存储：
+
+```powershell
+$env:CODING_AGENT_DATABASE_URL = "mysql+pymysql://coding_agent:<app-password>@localhost:3306/coding_agent?charset=utf8mb4"
+uv run alembic upgrade head
+uv run agent chat --workspace .
+
+# 或者仅对单次命令显式传入
+uv run agent chat --workspace . --database-url "mysql+pymysql://coding_agent:<app-password>@localhost:3306/coding_agent?charset=utf8mb4"
+```
+
+如果你本机确认能登录的是 root，但还没有创建 `coding_agent` 用户，本地验证也可以先用 root URL：
+
+```powershell
+$env:CODING_AGENT_DATABASE_URL = "mysql+pymysql://root:<root-password>@localhost:3306/coding_agent?charset=utf8mb4"
+uv --cache-dir .uv-cache run agent db-check
+uv --cache-dir .uv-cache run alembic upgrade head
+uv --cache-dir .uv-cache run agent chat --workspace .
+```
+
+长期使用和企业部署不要让应用直连 root。推荐先用 root 登录 MySQL，创建上面的 `coding_agent` 专用用户并完成授权，然后把 URL 切回 `coding_agent:<app-password>`。
+
+运行迁移或启动 Agent 前，可以先做数据库连通性诊断：
+
+```powershell
+uv --cache-dir .uv-cache run agent db-check
+```
+
+该命令不会调用模型，只检查数据库 URL、驱动、认证、目标库和权限。遇到 `Access denied for user 'coding_agent'@'localhost'` 时，说明 URL 中的用户或密码与 MySQL 实际账号不一致，或该用户没有被创建/授权。
+
+MySQL 8 默认账号认证方式通常是 `caching_sha2_password`。项目依赖已通过 `pymysql[rsa]` 锁定该认证方式所需的 `cryptography` 包；如果看到 `cryptography package is required for sha256_password or caching_sha2_password auth methods`，先运行 `uv sync` 或直接重新执行 `uv run ...`，让 uv 按 `uv.lock` 安装缺失依赖。不要通过把 MySQL 用户改回旧的 `mysql_native_password` 来规避该问题，除非你的部署环境明确要求兼容旧客户端。
+
+Alembic migration 会按以下优先级读取数据库 URL：
+
+1. `uv run alembic -x database_url="mysql+pymysql://..." upgrade head`
+2. 当前进程环境变量 `CODING_AGENT_DATABASE_URL`
+3. `alembic.ini` 中的 `sqlalchemy.url`
+
+推荐使用 `CODING_AGENT_DATABASE_URL`，不要把真实账号密码写入 `alembic.ini`。如果三处都没有配置，`alembic upgrade head` 会直接提示需要数据库 URL，而不是报 `KeyError: 'url'`。
+
+可选配置：
+
+```powershell
+$env:CODING_AGENT_STORAGE_BACKEND = "mysql"
+$env:CODING_AGENT_DATABASE_POOL_SIZE = "5"
+$env:CODING_AGENT_DATABASE_MAX_OVERFLOW = "10"
+$env:CODING_AGENT_DATABASE_POOL_PRE_PING = "true"
+$env:CODING_AGENT_DATABASE_CONNECT_TIMEOUT_SECONDS = "5"
+$env:CODING_AGENT_DATABASE_POOL_RECYCLE_SECONDS = "1800"
+```
+
+生产环境应先运行 Alembic migration，再启动 CLI/API。`CODING_AGENT_DATABASE_CREATE_SCHEMA=true` 或 `--database-create-schema` 只用于本地开发和自动化测试，避免生产启动时隐式改 schema。数据库配置错误会隐藏 URL 中的用户名和密码后再报错。
+
 ## FastAPI 服务
 
 当前提供最小 FastAPI 服务入口，用于后续 Web UI、审批控制台和后台 worker 复用同一套 runtime：
@@ -116,7 +197,7 @@ API 层只封装 `CodingAgent` 和 `ChatSession`，不复制 agent loop，也不
 - `approvals/audit.jsonl`：本地 API 审批请求和决议的脱敏审计记录
 - `logs/application.jsonl`：应用诊断日志
 
-项目还提供可选的 SQLAlchemy/PostgreSQL 会话存储底座：`coding_agent.db` 定义 sessions、runs、session events、checkpoints、transcripts、approvals、artifacts 和 model usage 表，`coding_agent.sessions.PostgresSessionStore` 实现与 JSONL store 相同的核心协议，`migrations/` 提供 Alembic 初始迁移。当前 CLI/API 默认仍使用 `.coding-agent/` JSONL 本地模式；生产化数据库配置切换、分布式锁和持久化审批队列属于后续任务。
+项目还提供可选的 SQLAlchemy/MySQL 会话存储底座：`coding_agent.db` 定义 sessions、runs、session events、checkpoints、transcripts、approvals、artifacts 和 model usage 表，`coding_agent.sessions.MySqlSessionStore` 实现与 JSONL store 相同的核心协议，`migrations/` 提供 Alembic 初始迁移。当前 CLI/API 默认仍使用 `.coding-agent/` JSONL 本地模式；显式配置 `CODING_AGENT_DATABASE_URL` 或 `--database-url` 后会改用 MySQL store 保存 session、checkpoint、summary 和 transcript。分布式锁和持久化审批队列仍属于后续任务。
 
 终端默认只显示 Agent 的最终回答、审批和失败/取消提示；工具完整输出不会直接显示。API 密钥、Authorization 头、密码/令牌字段和可识别的密钥赋值都会被脱敏。
 
@@ -124,7 +205,7 @@ API 层只封装 `CodingAgent` 和 `ChatSession`，不复制 agent loop，也不
 
 ## 扩展路线
 
-`CodingAgent` 是 FastAPI 和未来 UI 的入口，因此两者无需复制运行循环。`SessionStore`、`TraceStore`、`ArtifactStore` 与 `MemoryStore` 是稳定协议。当前已提供 PostgreSQL 会话存储实现和 Alembic 迁移，但运行时默认存储选择仍需继续配置化；`MemoryRecord` 已为后续经人工审核的记忆检索实现预留接口。下一阶段可将 Docker CLI 执行器替换为远程隔离运行时，或为补丁引入持久化的人工审批队列；多 Agent、Web/TUI/IDE 客户端、Milvus 和 Redis 尚未实现。
+`CodingAgent` 是 FastAPI 和未来 UI 的入口，因此两者无需复制运行循环。`SessionStore`、`TraceStore`、`ArtifactStore` 与 `MemoryStore` 是稳定协议。当前已提供 MySQL 会话存储实现、Alembic 迁移和 CLI/API 运行时配置切换；`MemoryRecord` 已为后续经人工审核的记忆检索实现预留接口。下一阶段可将 Docker CLI 执行器替换为远程隔离运行时，或为补丁引入持久化的人工审批队列；多 Agent、Web/TUI/IDE 客户端、Milvus 和 Redis 尚未实现。
 
 ## 评测
 

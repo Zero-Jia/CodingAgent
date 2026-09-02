@@ -233,28 +233,53 @@
 - 新增 `tests/test_api.py`，使用 fake model 覆盖创建/列出 session、SSE 事件流、未知 session、非法 session id、空消息、取消活跃运行和取消不存在的 run。
 - 当前未实现认证授权、Web 审批响应接口、持久化 approval queue 和跨进程 active run registry；这些仍属于后续平台化任务。
 
-### 11. PostgreSQL 存储
+### 11. MySQL 存储
 
 状态：已完成。
 
 任务：
 
-在现有 store protocol 后面增加 PostgreSQL 持久化实现。
+在现有 store protocol 后面增加 MySQL 持久化实现。
 
 验收标准：
 
 - Sessions、runs、events、approvals、artifacts 有 schema。
 - 存在 Alembic migrations。
 - JSONL 仍可作为本地模式使用。
-- JSONL 和 PostgreSQL store 都通过 repository contract tests。
+- JSONL 和 MySQL store 都通过 repository contract tests。
 
 完成记录：
 
-- 新增 `coding_agent.db`，用 SQLAlchemy Core 定义平台存储基础表，覆盖 sessions、runs、events、approvals、artifacts 和 model usage 等本轮验收对象。
-- 新增 `PostgresSessionStore`，实现 `SessionStore` 的事件、checkpoint、summary 和 transcript 核心行为。
+- 新增 `coding_agent.db`，用 SQLAlchemy Core 定义 MySQL 目标平台存储基础表，覆盖 sessions、runs、events、approvals、artifacts 和 model usage 等本轮验收对象。
+- 新增 `MySqlSessionStore`，实现 `SessionStore` 的事件、checkpoint、summary 和 transcript 核心行为。
 - 新增 Alembic 初始迁移 `0001_create_platform_storage`，创建 sessions、session_events、checkpoints、transcripts、approvals、artifacts 和 model_usage 表。
 - 新增 `tests/test_session_store_contract.py`，让 JSONL 与 SQLAlchemy store 共同通过 repository contract tests，并覆盖 summary 更新不得级联删除事件和 checkpoint。
-- JSONL 仍是当前 CLI/API 默认本地模式；PostgreSQL 运行时配置切换、分布式锁、持久化 approval queue 和更细粒度 runs/turns/tools/patches/audit logs 属于后续任务。
+- JSONL 仍是当前 CLI/API 默认本地模式；分布式锁、持久化 approval queue 和更细粒度 runs/turns/tools/patches/audit logs 属于后续任务。
+
+### 11a. MySQL 运行时配置切换
+
+状态：已完成。
+
+任务：
+
+让 CLI/API 可以通过显式数据库配置使用 `MySqlSessionStore`，同时保持 JSONL 为默认本地模式。
+
+验收标准：
+
+- 未设置 `database_url` 时仍使用 JSONL。
+- 显式配置 `CODING_AGENT_DATABASE_URL` 或 `--database-url` 时，CLI/API 使用 `MySqlSessionStore` 保存 session、checkpoint、summary 和 transcript。
+- MySQL 配置错误有清晰错误信息，不泄露凭据。
+- 自动化测试不依赖真实 DeepSeek API 或真实 MySQL 服务。
+
+完成记录：
+
+- `AgentConfig` 新增 `storage_backend`、`database_url`、连接池参数和本地/测试建表开关。
+- 新增 `coding_agent.sessions.factory`，集中选择 `JsonlSessionStore` 或 `MySqlSessionStore`，并提供数据库 URL 脱敏。
+- `CodingAgent` 改为通过 store factory 装配 session store，同时保留测试注入入口。
+- CLI `run/chat/resume/status` 支持 `--storage`、`--database-url` 和 `--database-create-schema`。
+- `SessionStore` 协议补充 `load_transcript`，让 `/history` 在 JSONL 和 MySQL 后端下行为一致。
+- MySQL engine 创建支持连接池参数、连接超时、连接回收和 `hide_parameters`。
+- 新增 `tests/test_storage_config.py` 和 CLI 装配测试，覆盖默认 JSONL、显式数据库、环境变量、错误脱敏和 API 数据库写入。
 
 ### 12. 审批 UI
 
@@ -278,7 +303,7 @@
 - 新增 `GET /approvals/ui` 最小本地审批页面，使用 DOM `textContent` 渲染动态内容，避免 diff preview 中的 HTML 被执行。
 - 新增 `GET /approvals`、`GET /approvals/{approval_id}`、`POST /approvals/{approval_id}/approve` 和 `POST /approvals/{approval_id}/reject`。
 - 审批详情会展示 tool、reason、session/run、changed files 和脱敏截断后的 details/diff preview。
-- 审批请求和决议会写入 `.coding-agent/approvals/audit.jsonl`，当前仍是本地 JSONL 审计，不是 PostgreSQL 持久化审批队列。
+- 审批请求和决议会写入 `.coding-agent/approvals/audit.jsonl`，当前仍是本地 JSONL 审计，不是 MySQL 持久化审批队列。
 - 取消 run/session 或消息流断开时会取消对应 pending approval，避免工具永久挂起。
 - 新增 API 回归测试，覆盖 approve、reject、patch preview 脱敏、audit、幂等决议、非法状态/ID、resolved 列表查询和 cancel 解挂。
 

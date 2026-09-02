@@ -58,7 +58,7 @@
 - 工具输出在持久化前应该摘要化和脱敏。
 - 未来 Web/API 客户端也必须保留同样的信任边界。
 
-## 决策 4：先使用 JSONL，再通过协议增加 PostgreSQL
+## 决策 4：先使用 JSONL，再通过协议增加 MySQL
 
 状态：已接受。
 
@@ -68,7 +68,7 @@
 
 决策：
 
-保留 JSONL 作为本地开发存储。平台化阶段在现有 store protocol 后面增加 PostgreSQL 实现。
+保留 JSONL 作为本地开发存储。平台化阶段在现有 store protocol 后面增加 MySQL 实现。
 
 影响：
 

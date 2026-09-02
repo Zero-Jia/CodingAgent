@@ -1,4 +1,4 @@
-"""SQLAlchemy-backed session storage for PostgreSQL deployments."""
+"""SQLAlchemy-backed session storage for MySQL deployments."""
 
 from __future__ import annotations
 
@@ -19,12 +19,12 @@ from coding_agent.sessions.store import (
 )
 
 
-class PostgresSessionStore:
+class MySqlSessionStore:
     """SessionStore implementation backed by SQLAlchemy Core.
 
     The implementation intentionally avoids dialect-specific upsert syntax so
     the same contract tests can run on SQLite while production can use
-    PostgreSQL through the same SQLAlchemy table definitions.
+    MySQL through the same SQLAlchemy table definitions.
     """
 
     def __init__(self, engine: Engine) -> None:
@@ -52,6 +52,9 @@ class PostgresSessionStore:
 
     async def append_transcript(self, session_id: str, content: str) -> None:
         await asyncio.to_thread(self._append_transcript_sync, session_id, content)
+
+    async def load_transcript(self, session_id: str) -> str:
+        return await asyncio.to_thread(self._load_transcript_sync, session_id)
 
     def _append_sync(self, event: SessionEvent) -> None:
         with self.engine.begin() as connection:
@@ -172,6 +175,14 @@ class PostgresSessionStore:
                     updated_at=now,
                 )
             )
+
+    def _load_transcript_sync(self, session_id: str) -> str:
+        statement = select(tables.transcripts.c.content).where(
+            tables.transcripts.c.session_id == session_id
+        )
+        with self.engine.connect() as connection:
+            content = connection.execute(statement).scalar_one_or_none()
+        return str(content) if content is not None else ""
 
 
 def _ensure_session(
@@ -309,7 +320,7 @@ def _summary_from_row(row: Any) -> SessionSummary:
 
 def _datetime(value: object) -> datetime:
     if isinstance(value, datetime):
-        return value
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
     if isinstance(value, str):
         return datetime.fromisoformat(value)
     raise ValueError(f"expected datetime-compatible value, got {type(value).__name__}")
