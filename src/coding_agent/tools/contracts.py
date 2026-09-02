@@ -28,6 +28,8 @@ class ToolResult(BaseModel):
 
 class ToolContext(BaseModel):
     workspace: str
+    session_id: str = ""
+    run_id: str = ""
     max_output_chars: int = 12_000
     artifact_output_chars: int = 4_000
 

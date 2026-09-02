@@ -6,10 +6,12 @@ import tarfile
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine, inspect
 
+from coding_agent.db import initialize_database, tables
 from coding_agent.sandbox.contracts import SandboxLimits, SandboxRequest, SandboxResult
 from coding_agent.sandbox.docker import _FILES_MARKER, _PATCH_MARKER, _split_output, _wrapper_script
-from coding_agent.sandbox.patches import PatchRegistry
+from coding_agent.sandbox.patches import MySqlPatchStore, PatchRegistry
 from coding_agent.sandbox.snapshot import SnapshotService
 from coding_agent.tools.contracts import ToolContext, ToolResult
 from coding_agent.tools.sandbox import SandboxCommandTool
@@ -153,7 +155,7 @@ def test_patch_registry_applies_matching_sandbox_patch(tmp_path: Path) -> None:
         snapshot = await snapshots.create()
         try:
             registry = PatchRegistry(tmp_path)
-            patch_id = registry.add(_PATCH, ["sample.txt"], snapshot)
+            patch_id = await registry.add(_PATCH, ["sample.txt"], snapshot)
             assert patch_id is not None
             approved, summary, files = await registry.apply(patch_id)
             assert approved, summary
@@ -186,7 +188,7 @@ def test_patch_registry_rejects_unsafe_patch(
     registry = PatchRegistry(tmp_path)
     snapshot = asyncio.run(SnapshotService(tmp_path).create())
     with pytest.raises(ValueError, match="unsafe sandbox patch"):
-        registry.add(patch, files, snapshot)
+        asyncio.run(registry.add(patch, files, snapshot))
     asyncio.run(SnapshotService(tmp_path).cleanup(snapshot))
 
 
@@ -200,7 +202,7 @@ def test_patch_registry_rejects_workspace_change_after_snapshot(tmp_path: Path) 
         snapshot = await snapshots.create()
         try:
             registry = PatchRegistry(tmp_path)
-            patch_id = registry.add(_PATCH, ["sample.txt"], snapshot)
+            patch_id = await registry.add(_PATCH, ["sample.txt"], snapshot)
             assert patch_id is not None
             target.write_bytes(b"concurrent change\n")
             applied, summary, _ = await registry.apply(patch_id)
@@ -211,6 +213,144 @@ def test_patch_registry_rejects_workspace_change_after_snapshot(tmp_path: Path) 
     applied, summary = asyncio.run(register_then_change())
     assert not applied
     assert "workspace changed" in summary
+
+
+def test_mysql_patch_store_persists_and_applies_from_new_registry(tmp_path: Path) -> None:
+    target = tmp_path / "sample.txt"
+    target.write_bytes(b"before\n")
+    _initialise_git(tmp_path, "sample.txt")
+    engine = create_engine(
+        f"sqlite+pysqlite:///{(tmp_path / 'patches.db').as_posix()}",
+        future=True,
+    )
+    initialize_database(engine)
+
+    async def register_and_apply_after_restart() -> None:
+        snapshots = SnapshotService(tmp_path)
+        snapshot = await snapshots.create()
+        try:
+            first = PatchRegistry(tmp_path, store=MySqlPatchStore(engine))
+            patch_id = await first.add(
+                _PATCH,
+                ["sample.txt"],
+                snapshot,
+                session_id="session-patch",
+                run_id="run-patch",
+            )
+            assert patch_id is not None
+
+            restarted = PatchRegistry(tmp_path, store=MySqlPatchStore(engine))
+            details = await restarted.approval_details(patch_id)
+            assert details["status"] == "pending"
+            assert details["changed_files"] == ["sample.txt"]
+            assert "after" in str(details["diff_preview"])
+
+            applied, summary, files = await restarted.apply(patch_id, applied_by="test")
+            assert applied, summary
+            assert files == ["sample.txt"]
+
+            record = await restarted.store.get(patch_id)
+            assert record.status == "applied"
+            assert record.applied_by == "test"
+        finally:
+            await snapshots.cleanup(snapshot)
+
+    try:
+        asyncio.run(register_and_apply_after_restart())
+        assert target.read_text(encoding="utf-8") == "after\n"
+    finally:
+        engine.dispose()
+
+
+def test_mysql_patch_store_invalidates_workspace_drift(tmp_path: Path) -> None:
+    target = tmp_path / "sample.txt"
+    target.write_bytes(b"before\n")
+    _initialise_git(tmp_path, "sample.txt")
+    engine = create_engine(
+        f"sqlite+pysqlite:///{(tmp_path / 'drift.db').as_posix()}",
+        future=True,
+    )
+    initialize_database(engine)
+
+    async def register_then_drift() -> tuple[bool, str, str]:
+        snapshots = SnapshotService(tmp_path)
+        snapshot = await snapshots.create()
+        try:
+            registry = PatchRegistry(tmp_path, store=MySqlPatchStore(engine))
+            patch_id = await registry.add(
+                _PATCH,
+                ["sample.txt"],
+                snapshot,
+                session_id="session-drift",
+                run_id="run-drift",
+            )
+            assert patch_id is not None
+            target.write_text("concurrent change\n", encoding="utf-8")
+            applied, summary, _ = await PatchRegistry(
+                tmp_path, store=MySqlPatchStore(engine)
+            ).apply(patch_id)
+            record = await registry.store.get(patch_id)
+            return applied, summary, record.status
+        finally:
+            await snapshots.cleanup(snapshot)
+
+    try:
+        applied, summary, status = asyncio.run(register_then_drift())
+        assert not applied
+        assert "workspace changed" in summary
+        assert status == "invalidated"
+    finally:
+        engine.dispose()
+
+
+def test_patch_registry_does_not_apply_same_patch_twice(tmp_path: Path) -> None:
+    target = tmp_path / "sample.txt"
+    target.write_bytes(b"before\n")
+    _initialise_git(tmp_path, "sample.txt")
+
+    async def register_and_apply_twice() -> tuple[bool, str]:
+        snapshots = SnapshotService(tmp_path)
+        snapshot = await snapshots.create()
+        try:
+            registry = PatchRegistry(tmp_path)
+            patch_id = await registry.add(_PATCH, ["sample.txt"], snapshot)
+            assert patch_id is not None
+            first, first_summary, _ = await registry.apply(patch_id)
+            assert first, first_summary
+            second, second_summary, _ = await registry.apply(patch_id)
+            return second, second_summary
+        finally:
+            await snapshots.cleanup(snapshot)
+
+    applied, summary = asyncio.run(register_and_apply_twice())
+    assert not applied
+    assert "applied" in summary
+    assert target.read_text(encoding="utf-8") == "after\n"
+
+
+def test_schema_contains_persistent_patches_table(tmp_path: Path) -> None:
+    engine = create_engine(
+        f"sqlite+pysqlite:///{(tmp_path / 'schema.db').as_posix()}",
+        future=True,
+    )
+    try:
+        initialize_database(engine)
+        columns = {column["name"] for column in inspect(engine).get_columns("patches")}
+
+        assert "patches" in inspect(engine).get_table_names()
+        assert {
+            "patch_id",
+            "status",
+            "patch_text",
+            "patch_sha256",
+            "changed_files",
+            "snapshot_files",
+            "diff_preview",
+            "invalidated_reason",
+        }.issubset(columns)
+        assert tables.patches.name == "patches"
+    finally:
+        engine.dispose()
 
 
 def test_sandbox_tool_registers_changes_but_verify_discards_them(tmp_path: Path) -> None:

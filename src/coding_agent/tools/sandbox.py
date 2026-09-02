@@ -82,7 +82,13 @@ class SandboxCommandTool:
             details: dict[str, object] = {"sandbox": "docker", "network": "disabled"}
             if self.capture_changes and result.status == "success":
                 try:
-                    patch_id = self.patches.add(result.patch, result.changed_files, snapshot)
+                    patch_id = await self.patches.add(
+                        result.patch,
+                        result.changed_files,
+                        snapshot,
+                        session_id=context.session_id,
+                        run_id=context.run_id,
+                    )
                 except ValueError as error:
                     yield ToolResult(status="validation_failed", summary=str(error))
                     return
@@ -126,11 +132,16 @@ class ApplyPatchTool:
             risk="write",
         )
 
-    def approval_details(self, params: dict[str, object]) -> dict[str, object]:
+    async def approval_details(self, params: dict[str, object]) -> dict[str, object]:
         patch_id = params.get("patch_id")
         if not isinstance(patch_id, str):
             return params
-        return self.patches.approval_details(patch_id)
+        return await self.patches.approval_details(patch_id)
+
+    async def approval_rejected(self, params: dict[str, object], reason: str) -> None:
+        patch_id = params.get("patch_id")
+        if isinstance(patch_id, str):
+            await self.patches.reject(patch_id, reason)
 
     async def execute(
         self, params: dict[str, object], context: ToolContext, cancellation: Cancellation
@@ -144,7 +155,10 @@ class ApplyPatchTool:
         if cancellation.is_set():
             yield ToolResult(status="cancelled", summary="patch application cancelled")
             return
-        applied, summary, files = await self.patches.apply(patch_id)
+        applied, summary, files = await self.patches.apply(
+            patch_id,
+            applied_by=context.session_id or "runtime",
+        )
         yield ToolResult(
             status="success" if applied else "validation_failed",
             summary=summary,

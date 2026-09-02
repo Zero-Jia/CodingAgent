@@ -14,6 +14,7 @@ from sqlalchemy import (
     Table,
     Text,
 )
+from sqlalchemy.dialects import mysql
 from sqlalchemy.sql import func
 
 metadata = MetaData()
@@ -196,6 +197,42 @@ artifacts = Table(
     mysql_charset="utf8mb4",
 )
 
+patches = Table(
+    "patches",
+    metadata,
+    Column("patch_id", String(128), primary_key=True),
+    Column("schema_version", Integer, nullable=False, default=1, server_default="1"),
+    Column(
+        "session_id",
+        String(128),
+        ForeignKey("sessions.session_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column(
+        "run_id",
+        String(128),
+        ForeignKey("runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("workspace", Text, nullable=False),
+    Column("status", String(32), nullable=False, default="pending", server_default="pending"),
+    Column("patch_sha256", String(64), nullable=False),
+    Column("patch_text", Text().with_variant(mysql.LONGTEXT(), "mysql"), nullable=False),
+    Column("patch_chars", Integer, nullable=False, default=0, server_default="0"),
+    Column("changed_files", JSON, nullable=False),
+    Column("snapshot_files", JSON, nullable=False),
+    Column("diff_preview", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("applied_at", DateTime(timezone=True), nullable=True),
+    Column("invalidated_reason", String(2000), nullable=False, default="", server_default=""),
+    Column("applied_by", String(128), nullable=False, default="", server_default=""),
+    mysql_engine="InnoDB",
+    mysql_charset="utf8mb4",
+)
+
 model_usage = Table(
     "model_usage",
     metadata,
@@ -231,6 +268,7 @@ schema_tables = (
     transcripts,
     approvals,
     artifacts,
+    patches,
     model_usage,
 )
 
@@ -240,6 +278,7 @@ __all__ = [
     "checkpoints",
     "metadata",
     "model_usage",
+    "patches",
     "runs",
     "schema_tables",
     "session_events",

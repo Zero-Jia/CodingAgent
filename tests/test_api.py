@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -26,7 +28,18 @@ from coding_agent.ai.contracts import (
 from coding_agent.api.app import ApiSessionManager, create_app
 from coding_agent.api.approvals import ApprovalRecord, ApprovalRegistry, MySqlApprovalStore
 from coding_agent.config import AgentConfig
+from coding_agent.sandbox.patches import MySqlPatchStore, PatchRegistry
+from coding_agent.sandbox.snapshot import SnapshotService
 from coding_agent.sessions.mysql import MySqlSessionStore
+
+_PATCH = """diff --git a/sample.txt b/sample.txt
+index 90be1f3..294186e 100644
+--- a/sample.txt
++++ b/sample.txt
+@@ -1 +1 @@
+-before
++after
+"""
 
 
 class FakeModelAdapter:
@@ -530,6 +543,77 @@ async def test_mysql_approval_queue_can_be_resolved_by_another_registry(
         agent_two.sessions.engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_mysql_patch_package_feeds_apply_patch_approval_and_writeback(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "sample.txt"
+    target.write_bytes(b"before\n")
+    _initialise_git(tmp_path, "sample.txt")
+    database_url = f"sqlite+pysqlite:///{(tmp_path / 'patch-api.db').as_posix()}"
+    model = FakeModelAdapter(
+        [
+            [
+                ToolCallCompleted(
+                    call=ToolCall(
+                        id="apply-call",
+                        name="apply_patch",
+                        arguments_json='{"patch_id": "seeded-patch"}',
+                    )
+                ),
+                Completed(),
+            ],
+            [TextDelta(text="patch applied"), Completed()],
+        ]
+    )
+    agent = _database_agent(tmp_path, model, database_url)
+    assert isinstance(agent.sessions, MySqlSessionStore)
+    app = create_app(agent)
+    manager = app.state.session_manager
+    await manager.create_session("session-persistent-patch")
+
+    snapshots = SnapshotService(tmp_path)
+    snapshot = await snapshots.create()
+    try:
+        patch_registry = PatchRegistry(tmp_path, store=MySqlPatchStore(agent.sessions.engine))
+        patch_id = await patch_registry.add(
+            _PATCH,
+            ["sample.txt"],
+            snapshot,
+            session_id="session-persistent-patch",
+            run_id="seed-run",
+        )
+        assert patch_id is not None
+        original = await patch_registry.store.get(patch_id)
+        await patch_registry.store.create(replace(original, patch_id="seeded-patch"))
+    finally:
+        await snapshots.cleanup(snapshot)
+
+    stream_task = asyncio.create_task(
+        _collect_manager_events(manager, "session-persistent-patch", "apply the seeded patch")
+    )
+    approval = await _wait_for_pending(app.state.approval_registry)
+
+    assert approval.tool_name == "apply_patch"
+    assert approval.details["patch_id"] == "seeded-patch"
+    assert approval.details["status"] == "pending"
+    assert approval.details["changed_files"] == ["sample.txt"]
+    assert "after" in str(approval.details["diff_preview"])
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        approved = await client.post(f"/approvals/{approval.approval_id}/approve")
+
+    events = await asyncio.wait_for(stream_task, timeout=2)
+    record = await patch_registry.store.get("seeded-patch")
+    assert approved.status_code == 200
+    assert target.read_text(encoding="utf-8") == "after\n"
+    assert record.status == "applied"
+    assert any(event["type"] == "tool_finished" for event in events)
+    agent.sessions.engine.dispose()
+
+
 async def _collect_manager_events(
     manager: ApiSessionManager, session_id: str, message: str = "cancel me"
 ) -> list[dict[str, object]]:
@@ -561,3 +645,9 @@ async def _wait_for_pending(registry: ApprovalRegistry) -> ApprovalRecord:
             return records[0]
         await asyncio.sleep(0.01)
     raise AssertionError("approval was not created")
+
+
+def _initialise_git(workspace: Path, file_name: str) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=workspace, check=True)
+    subprocess.run(["git", "add", "--", file_name], cwd=workspace, check=True)

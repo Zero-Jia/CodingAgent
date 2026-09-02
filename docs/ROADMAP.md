@@ -27,6 +27,7 @@
 - SQLAlchemy/MySQL 会话存储底座和 Alembic 初始迁移。
 - CLI/API MySQL session store 运行时配置切换，默认仍保留 JSONL。
 - MySQL-backed API approval queue，配置数据库后审批请求和决议可持久化。
+- MySQL-backed pending patch package，配置数据库后待回写 patch 可持久化并在应用前重新校验。
 - 最小 eval report 契约。
 - 面向 runtime、policy、tools、sandbox、patch validation 和 sessions 的基础测试。
 - `ruff`、`mypy`、`pytest` 配置。
@@ -111,6 +112,7 @@
 - 增加更细粒度 turns、tools、patches 和 audit logs schema。
 - 增加 Redis，用于 task state、locks 和 pub/sub。
 - 已完成：增加持久化 approval queue；配置 MySQL 后，审批请求、状态查询和 approve/reject 决议写入 `approvals` 表，等待中的运行可通过数据库决议继续执行。
+- 已完成：增加 pending patch 持久化审批包；配置 MySQL 后，沙箱生成的 patch text、changed files、snapshot hashes、diff preview 和状态写入 `patches` 表，应用前重新执行结构、路径、hash 和 `git apply --check` 校验。
 - 已完成：增加最小本地 Web patch 审批页面和 approve/reject API；JSONL 本地模式下审批队列仍是进程内状态，审计写入本地 JSONL。
 
 验收标准：
@@ -121,6 +123,7 @@
 - MySQL 实现通过 repository contract tests。
 - 本地最小审批 UI 可以展示 changed files、脱敏 diff preview，并支持 approve/reject。
 - 配置 MySQL 后，approval queue 状态可跨 API registry 查询和决议；JSONL 本地模式保持进程内行为。
+- 配置 MySQL 后，pending patch package 可跨 registry 恢复，审批通过后仍必须重新校验才能写回。
 
 ## Phase 4：知识检索和记忆
 

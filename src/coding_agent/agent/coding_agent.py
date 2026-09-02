@@ -18,9 +18,10 @@ from coding_agent.runtime.loop import AgentRuntime, ApprovalProvider
 from coding_agent.runtime.token_usage import SessionTokenState, TokenEventSource, TokenSnapshot
 from coding_agent.sandbox.contracts import SandboxLimits
 from coding_agent.sandbox.docker import DockerSandboxExecutor
-from coding_agent.sandbox.patches import PatchRegistry
+from coding_agent.sandbox.patches import MySqlPatchStore, PatchRegistry
 from coding_agent.sandbox.snapshot import SnapshotService
 from coding_agent.sessions.factory import create_session_store
+from coding_agent.sessions.mysql import MySqlSessionStore
 from coding_agent.sessions.store import (
     ConversationCheckpoint,
     SessionEvent,
@@ -366,7 +367,10 @@ class CodingAgent:
         )
 
     def _new_runtime(self) -> AgentRuntime:
-        patches = PatchRegistry(self.config.workspace)
+        patch_store = None
+        if isinstance(self.sessions, MySqlSessionStore):
+            patch_store = MySqlPatchStore(self.sessions.engine)
+        patches = PatchRegistry(self.config.workspace, store=patch_store)
         limits = SandboxLimits(
             timeout_seconds=self.config.sandbox_timeout_seconds,
             memory_mb=self.config.sandbox_memory_mb,

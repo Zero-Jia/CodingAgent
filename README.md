@@ -60,7 +60,7 @@ uv run agent run "检查仓库并建议最小修复" --workspace . --model deeps
 3. `sandbox_shell` 在容器内输出文本 Git diff 和变更文件清单。`verify` 的用途仅是运行验证，即使它改变了快照，变更也会被丢弃。
 4. 模型必须调用 `apply_patch` 才能请求回写。终端会展示变更文件和脱敏后的 diff 预览；回写前会重新检查路径、文件哈希和 `git apply --check`。
 
-补丁只保留在当前 Agent 运行时内，退出或恢复会话后必须重新运行沙箱命令。回写目标必须是 Git 工作树，既有文件应由 Git 跟踪。当前版本有意拒绝二进制补丁、子模块、符号链接、可执行权限变更、重命名和复制；这些情况需要人工处理。任何补丁若触及敏感或内部目录，或快照后的原文件已被其他进程改动，都会拒绝写回。
+JSONL 本地模式下，补丁只保留在当前 Agent 运行时内，退出或恢复会话后必须重新运行沙箱命令。配置 MySQL session store 后，沙箱生成的 pending patch 会作为 package 写入 `patches` 表，包含 patch text、changed files、snapshot hashes、diff preview 和状态；新 runtime 可以读取旧 pending patch，但应用前仍必须重新执行结构、路径、文件哈希和 `git apply --check` 校验。回写目标必须是 Git 工作树，既有文件应由 Git 跟踪。当前版本有意拒绝二进制补丁、子模块、符号链接、可执行权限变更、重命名和复制；这些情况需要人工处理。任何补丁若触及敏感或内部目录，或快照后的原文件已被其他进程改动，都会拒绝写回。
 
 模型不再获得直接的 `shell`、`edit`、`write` 工具。`read`、`search` 和 `git_diff` 仍是受限的只读工具；其中 `git_diff` 禁用 Git 外部 diff 与 textconv。
 
@@ -175,7 +175,7 @@ $env:CODING_AGENT_DATABASE_POOL_RECYCLE_SECONDS = "1800"
 - `GET /approvals/ui`：打开本地最小审批页面，查看并处理待审批操作。
 - `GET /approvals`、`GET /approvals/{approval_id}`、`POST /approvals/{approval_id}/approve`、`POST /approvals/{approval_id}/reject`：列出、查看、批准或拒绝待审批操作。
 
-API 层只封装 `CodingAgent` 和 `ChatSession`，不复制 agent loop，也不新增宿主机写入或宿主机 shell 能力。服务进程会复用现有 session lock，避免与 CLI 或另一个 API 进程同时写入同一会话。API 的审批页面目前是本地最小实现：JSONL 本地模式下待审批项仍保存在当前进程内；配置 MySQL session store 后，审批请求、状态查询和 approve/reject 决议会持久化到 `approvals` 表，等待中的运行会轮询数据库决议并继续执行。审批审计仍以脱敏 JSONL 写入 `.coding-agent/approvals/audit.jsonl`。当前尚未实现认证、多进程 active run/session lock 协调、生产级 Web UI 和 pending patch 持久化；生产部署前需要补齐这些能力，并且服务应只绑定可信本地地址或受认证代理保护。
+API 层只封装 `CodingAgent` 和 `ChatSession`，不复制 agent loop，也不新增宿主机写入或宿主机 shell 能力。服务进程会复用现有 session lock，避免与 CLI 或另一个 API 进程同时写入同一会话。API 的审批页面目前是本地最小实现：JSONL 本地模式下待审批项仍保存在当前进程内；配置 MySQL session store 后，审批请求、状态查询和 approve/reject 决议会持久化到 `approvals` 表，等待中的运行会轮询数据库决议并继续执行；pending patch package 会持久化到 `patches` 表，审批通过后仍由 `apply_patch` 重新校验再写回。审批审计仍以脱敏 JSONL 写入 `.coding-agent/approvals/audit.jsonl`。当前尚未实现认证、多进程 active run/session lock 协调和生产级 Web UI；生产部署前需要补齐这些能力，并且服务应只绑定可信本地地址或受认证代理保护。
 
 ## 架构
 
@@ -197,15 +197,15 @@ API 层只封装 `CodingAgent` 和 `ChatSession`，不复制 agent loop，也不
 - `approvals/audit.jsonl`：本地 API 审批请求和决议的脱敏审计记录
 - `logs/application.jsonl`：应用诊断日志
 
-项目还提供可选的 SQLAlchemy/MySQL 会话和审批存储底座：`coding_agent.db` 定义 sessions、runs、session events、checkpoints、transcripts、approvals、artifacts 和 model usage 表，`coding_agent.sessions.MySqlSessionStore` 实现与 JSONL store 相同的核心协议，`coding_agent.api.approvals.MySqlApprovalStore` 持久化 API 审批请求和决议，`migrations/` 提供 Alembic 迁移。当前 CLI/API 默认仍使用 `.coding-agent/` JSONL 本地模式；显式配置 `CODING_AGENT_DATABASE_URL` 或 `--database-url` 后会改用 MySQL store 保存 session、checkpoint、summary、transcript 和 API approval queue。分布式锁、完整 audit log schema 和 pending patch 持久化仍属于后续任务。
+项目还提供可选的 SQLAlchemy/MySQL 会话、审批和 patch package 存储底座：`coding_agent.db` 定义 sessions、runs、session events、checkpoints、transcripts、approvals、artifacts、patches 和 model usage 表，`coding_agent.sessions.MySqlSessionStore` 实现与 JSONL store 相同的核心协议，`coding_agent.api.approvals.MySqlApprovalStore` 持久化 API 审批请求和决议，`coding_agent.sandbox.patches.MySqlPatchStore` 持久化 pending patch package，`migrations/` 提供 Alembic 迁移。当前 CLI/API 默认仍使用 `.coding-agent/` JSONL 本地模式；显式配置 `CODING_AGENT_DATABASE_URL` 或 `--database-url` 后会改用 MySQL store 保存 session、checkpoint、summary、transcript、API approval queue 和 pending patch package。分布式锁和完整 audit log schema 仍属于后续任务。
 
 终端默认只显示 Agent 的最终回答、审批和失败/取消提示；工具完整输出不会直接显示。API 密钥、Authorization 头、密码/令牌字段和可识别的密钥赋值都会被脱敏。
 
-应用启动、会话恢复、运行开始和完成会写入 `logs/application.jsonl`。每次有文本输出的工具调用都会将脱敏全文保存到 `artifacts/<session_id>/<run_id>/`；trace、transcript、session 事件和 checkpoint 仅记录摘要、字符数与 artifact 相对路径。待回写补丁不会持久化到这些目录。
+应用启动、会话恢复、运行开始和完成会写入 `logs/application.jsonl`。每次有文本输出的工具调用都会将脱敏全文保存到 `artifacts/<session_id>/<run_id>/`；trace、transcript、session 事件和 checkpoint 仅记录摘要、字符数与 artifact 相对路径。MySQL 模式下待回写补丁持久化在数据库 `patches` 表，不写入 `.coding-agent/` 目录。
 
 ## 扩展路线
 
-`CodingAgent` 是 FastAPI 和未来 UI 的入口，因此两者无需复制运行循环。`SessionStore`、`TraceStore`、`ArtifactStore` 与 `MemoryStore` 是稳定协议。当前已提供 MySQL 会话存储实现、MySQL-backed API approval queue、Alembic 迁移和 CLI/API 运行时配置切换；`MemoryRecord` 已为后续经人工审核的记忆检索实现预留接口。下一阶段可将 Docker CLI 执行器替换为远程隔离运行时，或为 pending patch 引入持久化审批包；多 Agent、Web/TUI/IDE 客户端、Milvus 和 Redis 尚未实现。
+`CodingAgent` 是 FastAPI 和未来 UI 的入口，因此两者无需复制运行循环。`SessionStore`、`TraceStore`、`ArtifactStore` 与 `MemoryStore` 是稳定协议。当前已提供 MySQL 会话存储实现、MySQL-backed API approval queue、MySQL-backed pending patch package、Alembic 迁移和 CLI/API 运行时配置切换；`MemoryRecord` 已为后续经人工审核的记忆检索实现预留接口。下一阶段可将 Docker CLI 执行器替换为远程隔离运行时，或补齐 Redis active run/session lock；多 Agent、Web/TUI/IDE 客户端、Milvus 和 Redis 尚未实现。
 
 ## 评测
 

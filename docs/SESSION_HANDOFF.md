@@ -39,7 +39,7 @@
 - 供应商无关的模型、消息、工具调用、usage 和事件契约。
 - 事件驱动 runtime，支持工具执行、审批流、取消、trace 写入和 artifact 写入。
 - 显式 Plan Mode，支持 `--plan`，要求模型在使用沙箱或 patch 工具前先提交计划并获批。
-- API 本地最小 Web 审批入口，支持查看 pending approval、approve/reject、MySQL-backed approval queue 和脱敏 JSONL 审计。
+- API 本地最小 Web 审批入口，支持查看 pending approval、approve/reject、MySQL-backed approval queue、MySQL-backed pending patch package 和脱敏 JSONL 审计。
 - 确定性 context manager，支持 token 预算触发、自动 compact、近期尾部保留和 tool call/result 边界保护。
 - Session 级 token usage 账本，支持 provider usage 累计统计、当前上下文 token、窗口占比和 compact 节省量展示。
 - 只读仓库工具：`read`、`search`、`git_diff`。
@@ -52,6 +52,7 @@
 - SQLAlchemy/MySQL 会话存储底座和 Alembic 初始迁移。
 - CLI/API MySQL session store 运行时配置切换，默认仍使用 JSONL，显式 `database_url` 时使用 `MySqlSessionStore`。
 - 配置 MySQL 后，API approval queue 会持久化审批请求、状态查询和 approve/reject 决议；等待中的 runtime 可以观察数据库决议并继续执行。
+- 配置 MySQL 后，pending patch package 会持久化 patch text、changed files、snapshot hashes、diff preview 和状态；新 runtime/registry 可以读取旧 pending patch，但应用前仍会重新校验。
 - 连续 chat session 的独占锁。
 - `src/coding_agent/py.typed` 包类型标记。
 - GitHub Actions 最小 CI workflow，运行 ruff、mypy 和 pytest。
@@ -73,12 +74,65 @@
 - 模型辅助上下文摘要。
 - 多 agent 编排。
 - Worktree 隔离。
-- Pending patch 持久化。
 - coverage、pre-commit、release workflow、安全扫描和完整 CI/CD 发布流水线。
 
 ## 最近一次 Session
 
 本轮完成：
+
+- 完成 pending patch 持久化审批包的小边界任务，不实现 Redis、完整 Web UI、RBAC 或完整 audit log schema。
+- 参考 `D:\Software\MewCode` 的 `PermissionRequest`/`PermissionResponse`、remote pending permission future、diff 截断和 session 恢复容错思路；没有引入其宿主机直写、本地 shell 权限模型或 `ALLOW_ALWAYS` 规则写入。
+- 新增 `PatchStore` 抽象、`InMemoryPatchStore` 和 `MySqlPatchStore`。
+- `PatchRegistry` 默认仍使用进程内 store；配置 MySQL session store 后，runtime 使用 `MySqlPatchStore` 将 patch package 写入 `patches` 表。
+- `PendingPatch` 记录 patch text、patch sha256、changed files、snapshot file hashes、diff preview、状态、session/run 关联、创建/更新时间和应用元数据。
+- `sandbox_shell` 创建 patch 时写入 session/run 上下文；`apply_patch` 的审批详情支持异步读取持久化 patch package。
+- `apply_patch` 应用前将 patch 从 `pending` claim 为 `applying`，再重新执行结构校验、敏感路径校验、changed files 一致性校验、文件 hash 校验和 `git apply --check`；成功后标记 `applied`，失败后标记 `invalidated`。
+- 审批拒绝 `apply_patch` 时，关联 pending patch 会标记为 `rejected`，避免后续误用。
+- 新增 Alembic migration `0003_add_persistent_patch_packages`，创建 `patches` 表。
+- 新增 sandbox 和 API 回归测试，覆盖跨 registry 恢复应用、工作区漂移失效、重复应用保护、schema、审批详情读取和批准后写回。
+
+本轮修改文件：
+
+- `README.md`
+- `CodingAgent.md`
+- `migrations/versions/0003_add_persistent_patch_packages.py`
+- `src/coding_agent/agent/coding_agent.py`
+- `src/coding_agent/db/tables.py`
+- `src/coding_agent/runtime/loop.py`
+- `src/coding_agent/sandbox/patches.py`
+- `src/coding_agent/tools/contracts.py`
+- `src/coding_agent/tools/sandbox.py`
+- `tests/test_api.py`
+- `tests/test_sandbox.py`
+- `tests/test_session_store_contract.py`
+- `docs/ARCHITECTURE.md`
+- `docs/ROADMAP.md`
+- `docs/TASKS.md`
+- `docs/SESSION_HANDOFF.md`
+- `docs/VERIFICATION.md`
+
+本轮验证结果：
+
+- `uv --cache-dir .uv-cache run ruff check src\coding_agent\sandbox\patches.py src\coding_agent\tools\sandbox.py src\coding_agent\runtime\loop.py src\coding_agent\agent\coding_agent.py src\coding_agent\db\tables.py tests\test_sandbox.py tests\test_api.py tests\test_session_store_contract.py migrations\versions\0003_add_persistent_patch_packages.py`：通过。
+- `uv --cache-dir .uv-cache run mypy src\coding_agent\sandbox\patches.py src\coding_agent\tools\sandbox.py src\coding_agent\runtime\loop.py src\coding_agent\agent\coding_agent.py tests\test_sandbox.py tests\test_api.py`：通过。
+- `uv --cache-dir .uv-cache run pytest tests\test_sandbox.py --basetemp .codex-test-tmp-patch-sandbox -p no:cacheprovider`：18 passed，1 skipped。
+- `uv --cache-dir .uv-cache run pytest tests\test_session_store_contract.py --basetemp .codex-test-tmp-patch-schema -p no:cacheprovider`：8 passed。
+- `uv --cache-dir .uv-cache run pytest tests\test_api.py --basetemp .codex-test-tmp-patch-api -p no:cacheprovider`：16 passed。
+- `uv --cache-dir .uv-cache run ruff check`：通过。
+- `uv --cache-dir .uv-cache run mypy`：通过，50 source files。
+- `uv --cache-dir .uv-cache run mypy src`：通过，50 source files。
+- `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-patch-final -p no:cacheprovider`：129 passed，1 skipped。
+
+本轮未完成事项：
+
+- 未用真实 DeepSeek API 启动完整聊天回合。
+- 未对本机真实 MySQL 执行 `0003` migration；自动化通过 SQLite Alembic migration 和 SQLAlchemy MySQL dialect 编译测试覆盖结构兼容性。
+- `patches` 表已经保存 patch package，但完整审计查询、操作者身份、RBAC 和多用户归属仍未实现。
+- Session lock 和 active run registry 仍是本地文件/进程内状态，不支持多 worker 分布式协调。
+- `applying` 状态如果进程在实际 `git apply` 前后崩溃，当前没有自动租约恢复，需要后续结合 worker lease/Redis 或数据库锁超时策略处理。
+- 审批页面仍是最小本地页面，尚未实现认证、CORS 白名单、生产级前端或审计筛选。
+
+上轮完成：
 
 - 完成持久化 approval queue 的小边界任务，不实现 Redis、完整 Web UI 或 pending patch 持久化。
 - 参考 `D:\Software\MewCode` 的 `PermissionRequest`/`PermissionResponse`、remote pending permission future 和权限测试思路；只借鉴“挂起审批、由 UI/API 决议、拒绝后把结果回给模型”的事件模型，没有引入其宿主机直写或本地 shell 权限模型。
@@ -491,21 +545,21 @@
 
 建议下一轮任务：
 
-从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若继续推进平台化，建议先做 pending patch 持久化审批包，补齐“服务重启后仍能审查并应用旧 patch”的链路；若优先补工程化，可以先增加 coverage 或 pre-commit。
+从 `docs/TASKS.md` 中选择下一个边界清晰的任务。若继续推进平台化，建议先做 Redis-backed active run/session lock，为多 worker API 部署补齐运行态协调；若优先补工程化，可以先增加 coverage 或 pre-commit。
 
 建议 prompt：
 
 ```text
-本轮只做 pending patch 持久化审批包，不实现 Redis 或完整 Web UI。请让沙箱产生的待回写 patch 可以安全持久化、重启后重新校验并继续通过 approval queue 审查；保留当前 Docker sandbox + patch-only 写回模型，补充 patch 校验测试、API 测试、迁移和验证记录。
+本轮只做 Redis-backed active run/session lock，不实现完整 Web UI 或 RBAC。请让 API 多 worker 场景下同一 session/run 的活跃状态、取消信号和锁协调不再依赖单进程内存；保留当前 Docker sandbox + patch-only 写回模型，补充并发/取消测试、配置文档和验证记录。
 ```
 
 验收标准：
 
-- 未配置数据库时，当前内存 `PatchRegistry` 行为不回退。
-- 配置 MySQL 后，pending patch 的 patch text、changed files、snapshot hashes、diff preview 和状态可持久化。
-- 服务重启后，旧 patch 必须重新执行结构校验、敏感路径校验、文件哈希校验和 `git apply --check`，不能盲目回写。
-- 审批详情继续脱敏和限制大小，不泄露密钥、token 或数据库凭据。
-- 二进制 patch、mode change、rename/copy、submodule、symlink 和 executable patch 仍应拒绝。
+- 未配置 Redis 时，当前单进程 active run registry 和本地 session lock 行为不回退。
+- 配置 Redis 后，同一 session 在不同 API worker 中不能并发运行。
+- 配置 Redis 后，取消 run/session 可以跨 worker 传递取消意图。
+- 锁必须有 TTL、续约和崩溃后释放策略，避免永久死锁。
+- Redis URL 和认证信息必须脱敏，不泄露凭据。
 - 自动化测试不依赖真实 DeepSeek API。
 - `uv --cache-dir .uv-cache run ruff check`、`uv --cache-dir .uv-cache run mypy`、`uv --cache-dir .uv-cache run mypy src` 和 `uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovider` 通过。
 

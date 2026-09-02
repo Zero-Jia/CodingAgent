@@ -32,7 +32,7 @@ uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovid
 
 结果：
 
-本轮增加 MySQL-backed API approval queue。JSONL 本地模式仍保留进程内 approval registry 和本地 JSONL audit；配置 MySQL session store 后，审批请求、状态查询和 approve/reject 决议会写入 `approvals` 表，等待中的 runtime 会轮询数据库决议并继续执行。新增 Alembic migration `0002_add_persistent_approval_queue_fields` 和跨 registry 审批回归测试后，验证结果如下。
+本轮增加 MySQL-backed pending patch package。JSONL 本地模式仍保留进程内 `PatchRegistry`；配置 MySQL session store 后，沙箱生成的 pending patch 会把 patch text、patch sha256、changed files、snapshot hashes、diff preview、状态和 session/run 关联写入 `patches` 表。`apply_patch` 审批详情可从持久化 package 读取；审批通过后仍会重新执行结构、路径、文件 hash 和 `git apply --check` 校验，成功标记 `applied`，失败标记 `invalidated`。新增 Alembic migration `0003_add_persistent_patch_packages` 和跨 registry patch 回归测试后，验证结果如下。
 
 ```text
 uv --cache-dir .uv-cache run ruff check
@@ -49,46 +49,46 @@ uv --cache-dir .uv-cache run mypy src
 Success: no issues found in 50 source files
 ```
 
-定向存储配置测试：
+定向 sandbox patch 测试：
 
 ```text
-uv --cache-dir .uv-cache run pytest tests\test_storage_config.py --basetemp .codex-test-tmp-approval-storage -p no:cacheprovider
-9 passed
-```
-
-定向 API approval queue 测试：
-
-```text
-uv --cache-dir .uv-cache run pytest tests\test_api.py --basetemp .codex-test-tmp-approval-api -p no:cacheprovider
-15 passed
+uv --cache-dir .uv-cache run pytest tests\test_sandbox.py --basetemp .codex-test-tmp-patch-sandbox -p no:cacheprovider
+18 passed, 1 skipped
 ```
 
 定向 session store 和 migration 测试：
 
 ```text
-uv --cache-dir .uv-cache run pytest tests\test_session_store_contract.py --basetemp .codex-test-tmp-approval-schema -p no:cacheprovider
+uv --cache-dir .uv-cache run pytest tests\test_session_store_contract.py --basetemp .codex-test-tmp-patch-schema -p no:cacheprovider
 8 passed
+```
+
+定向 API approval/patch 测试：
+
+```text
+uv --cache-dir .uv-cache run pytest tests\test_api.py --basetemp .codex-test-tmp-patch-api -p no:cacheprovider
+16 passed
 ```
 
 定向 mypy：
 
 ```text
-uv --cache-dir .uv-cache run mypy src\coding_agent\api\approvals.py src\coding_agent\api\app.py tests\test_api.py
-Success: no issues found in 3 source files
+uv --cache-dir .uv-cache run mypy src\coding_agent\sandbox\patches.py src\coding_agent\tools\sandbox.py src\coding_agent\runtime\loop.py src\coding_agent\agent\coding_agent.py tests\test_sandbox.py tests\test_api.py
+Success: no issues found in 6 source files
 ```
 
 定向 ruff：
 
 ```text
-uv --cache-dir .uv-cache run ruff check src\coding_agent\api\approvals.py src\coding_agent\api\app.py src\coding_agent\db\tables.py tests\test_api.py tests\test_session_store_contract.py migrations\versions\0002_add_persistent_approval_queue_fields.py
+uv --cache-dir .uv-cache run ruff check src\coding_agent\sandbox\patches.py src\coding_agent\tools\sandbox.py src\coding_agent\runtime\loop.py src\coding_agent\agent\coding_agent.py src\coding_agent\db\tables.py tests\test_sandbox.py tests\test_api.py tests\test_session_store_contract.py migrations\versions\0003_add_persistent_patch_packages.py
 All checks passed!
 ```
 
 全量测试：
 
 ```text
-uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-approval-final -p no:cacheprovider
-124 passed, 1 skipped
+uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp-patch-final -p no:cacheprovider
+129 passed, 1 skipped
 ```
 
 全量类型检查：
@@ -110,7 +110,7 @@ uv --cache-dir .uv-cache run ruff check
 All checks passed!
 ```
 
-本轮自动化测试仍不依赖真实 DeepSeek API，也不启动 Docker。数据库后端自动化测试使用 SQLAlchemy SQLite URL 覆盖同一 `MySqlSessionStore` 和 `MySqlApprovalStore` 行为、API 装配、checkpoint、summary、events、transcript、Alembic migration、跨 registry approval 决议和配置错误脱敏，并使用 SQLAlchemy MySQL dialect 编译测试覆盖 MySQL DDL 兼容性。本轮未对本机真实 MySQL 执行 `0002` migration。
+本轮自动化测试仍不依赖真实 DeepSeek API，也不启动 Docker。数据库后端自动化测试使用 SQLAlchemy SQLite URL 覆盖同一 `MySqlSessionStore`、`MySqlApprovalStore` 和 `MySqlPatchStore` 行为、API 装配、checkpoint、summary、events、transcript、Alembic migration、跨 registry approval 决议、跨 registry patch 应用、工作区漂移失效和配置错误脱敏，并使用 SQLAlchemy MySQL dialect 编译测试覆盖 MySQL DDL 兼容性。本轮未对本机真实 MySQL 执行 `0003` migration。
 
 历史验证摘要：
 

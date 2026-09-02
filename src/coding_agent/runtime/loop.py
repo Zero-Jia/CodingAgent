@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import uuid
 from collections.abc import AsyncIterator
@@ -370,6 +371,8 @@ class AgentRuntime:
             approval_details = getattr(tool, "approval_details", None)
             if callable(approval_details):
                 candidate = approval_details(params)
+                if inspect.isawaitable(candidate):
+                    candidate = await candidate
                 if isinstance(candidate, dict):
                     approval_params = candidate
             yield ApprovalRequested(
@@ -390,6 +393,11 @@ class AgentRuntime:
                 payload={"tool": call.name, "approved": allowed},
             )
         if not allowed:
+            rejection_handler = getattr(tool, "approval_rejected", None)
+            if call.name == "apply_patch" and callable(rejection_handler):
+                rejected = rejection_handler(params, denied_reason)
+                if inspect.isawaitable(rejected):
+                    await rejected
             denied_result = ToolResult(status="policy_denied", summary=denied_reason)
             self._model_tool_results[call.id] = denied_result.model_dump()
             failed_plan_payload = self.plan.record_tool_result(call.name, denied_result)
@@ -414,7 +422,10 @@ class AgentRuntime:
             return
         yield ToolStarted(session_id=session_id, run_id=run_id, payload={"tool": call.name})
         result: ToolResult | None = None
-        async for update in tool.execute(params, self.tool_context, self.cancel_signal):
+        tool_context = self.tool_context.model_copy(
+            update={"session_id": session_id, "run_id": run_id}
+        )
+        async for update in tool.execute(params, tool_context, self.cancel_signal):
             if isinstance(update, ToolUpdate):
                 yield ToolUpdated(
                     session_id=session_id,

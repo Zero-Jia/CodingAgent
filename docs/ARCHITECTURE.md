@@ -4,9 +4,9 @@
 
 ## 当前定位
 
-`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、最小 FastAPI/SSE 服务入口、本地 Web 审批入口、Model Gateway 与 DeepSeek 模型适配器、事件驱动运行时、显式 Plan Mode、Docker 沙箱执行、沙箱执行前 command risk detector、基于 patch 的宿主机写回、默认 JSONL 会话持久化、可配置 SQLAlchemy/MySQL 会话存储、MySQL-backed API approval queue、provider usage token 统计、脱敏 trace 和审批审计存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
+`CodingAgent` 是一个安全优先的本地 coding agent MVP，面向 Windows 本地开发环境。当前实现是一个 Python 包，提供 Typer 命令行入口、最小 FastAPI/SSE 服务入口、本地 Web 审批入口、Model Gateway 与 DeepSeek 模型适配器、事件驱动运行时、显式 Plan Mode、Docker 沙箱执行、沙箱执行前 command risk detector、基于 patch 的宿主机写回、默认 JSONL 会话持久化、可配置 SQLAlchemy/MySQL 会话存储、MySQL-backed API approval queue、MySQL-backed pending patch package、provider usage token 统计、脱敏 trace 和审批审计存储、GitHub Actions 最小 CI，以及围绕安全链路和 runtime 的基础测试。
 
-当前项目还不是完整企业级平台。它尚未实现认证授权、生产级 Web UI、Redis 分布式 active run/session lock、pending patch 持久化、Milvus、MCP、Skills、Hooks、真实 memory 检索、模型辅助上下文摘要、多 agent 编排和 worktree 隔离。
+当前项目还不是完整企业级平台。它尚未实现认证授权、生产级 Web UI、Redis 分布式 active run/session lock、Milvus、MCP、Skills、Hooks、真实 memory 检索、模型辅助上下文摘要、多 agent 编排和 worktree 隔离。
 
 ## 核心设计原则
 
@@ -148,7 +148,7 @@
 - `contracts.py`：sandbox request、result、limits、snapshot 等模型。
 - `snapshot.py`：生成过滤后的工作区快照。
 - `docker.py`：用无网络、强约束的一次性 Docker 容器执行命令。
-- `patches.py`：注册、校验并应用沙箱生成的 patch。
+- `patches.py`：注册、持久化、校验并应用沙箱生成的 patch。
 
 当前状态：
 
@@ -157,6 +157,8 @@
 - Docker 通过 stdin 接收快照，不挂载宿主工作区。
 - Docker 使用 `--network none`、`--read-only`、非 root 用户、`no-new-privileges`、删除 capabilities、PID/内存/CPU 限制和 tmpfs workspace。
 - Patch 应用会拒绝二进制 patch、子模块、文件模式变化、符号链接、可执行权限变化、重命名、复制、敏感路径、changed-file 不一致以及宿主并发修改。
+- `PatchRegistry` 通过 `PatchStore` 抽象保存待回写 patch。默认 JSONL/本地模式使用进程内 `InMemoryPatchStore`；配置 MySQL session store 时，runtime 会使用 `MySqlPatchStore` 将 patch text、patch sha256、changed files、snapshot file hashes、diff preview、状态和 session/run 关联写入 `patches` 表。
+- `apply_patch` 在应用前会先把 patch 从 `pending` claim 为 `applying`，再重新执行结构、路径、hash 和 `git apply --check` 校验。成功后标记 `applied`，校验失败或 `git apply` 失败后标记 `invalidated`，审批拒绝时标记 `rejected`。
 
 后续工作：
 
@@ -164,7 +166,7 @@
 - 增加镜像 digest 固定。
 - 增加沙箱资源指标。
 - 增加不同语言的沙箱镜像。
-- 增加 pending patch 持久化审批包。
+- 增加 patch package 过期清理和更完整的数据库审计查询。
 
 ### `coding_agent.policy`
 
@@ -329,7 +331,7 @@
 
 - 当前没有认证授权，默认只适合本地可信回环地址。
 - JSONL 本地模式下审批队列仍是进程内状态，服务重启后 pending approval 会丢失。
-- MySQL 模式持久化的是 approval request 和 decision，不持久化 runtime 内存中的 pending patch；服务重启后不能直接应用旧 patch。
+- MySQL 模式会持久化 approval request、decision 和 pending patch package；旧 patch 在新 runtime 中应用前仍必须重新校验，不能盲目写回。
 - 当前审批审计仍是本地 JSONL 文件，还没有完整 audit log schema。
 - 当前 active run registry 是进程内状态；多 worker 部署需要 Redis 或数据库锁。
 
@@ -338,7 +340,7 @@
 - 增加认证和 CORS 配置。
 - 增加生产级审批页面和完整 audit log schema。
 - 增加 WebSocket 事件流或保留 SSE 作为稳定协议。
-- 将 active run、会话锁和 pending patch package 迁移到 Redis/MySQL。
+- 将 active run 和会话锁迁移到 Redis/MySQL。
 
 ### `coding_agent.db`
 
@@ -346,7 +348,7 @@
 
 当前文件：
 
-- `tables.py`：SQLAlchemy Core 表定义，覆盖 sessions、runs、session_events、checkpoints、transcripts、approvals、artifacts 和 model_usage。
+- `tables.py`：SQLAlchemy Core 表定义，覆盖 sessions、runs、session_events、checkpoints、transcripts、approvals、artifacts、patches 和 model_usage。
 - `engine.py`：数据库 engine 创建和 schema 初始化工具。
 - `migrations/versions/0001_create_platform_storage.py`：Alembic 初始迁移。
 
@@ -354,12 +356,12 @@
 
 - MySQL 是目标生产数据库，合同测试使用 SQLite 执行同一套 SQLAlchemy schema 和 repository 行为。
 - JSONL 仍是 CLI/API 默认本地模式；显式数据库 URL 会切换到 `MySqlSessionStore`。
-- 表结构已为 run 状态追踪、持久化审批队列、artifact 审计和 model usage 看板预留基础字段；`approvals` 表当前记录 reason、details、status、expires_at、resolved_at、resolution_reason 和 resolved_by。
+- 表结构已为 run 状态追踪、持久化审批队列、patch package、artifact 审计和 model usage 看板预留基础字段；`approvals` 表当前记录 reason、details、status、expires_at、resolved_at、resolution_reason 和 resolved_by，`patches` 表记录 patch text、changed files、snapshot hashes、diff preview、状态和应用元数据。
 - 生产环境应通过 Alembic 管理 schema；`database_create_schema` 只用于本地开发和自动化测试。
 
 后续工作：
 
-- 增加 turns、tool_calls、patches 和 audit_logs 的更细粒度规范化表。
+- 增加 turns、tool_calls 和 audit_logs 的更细粒度规范化表。
 - 增加数据库健康检查和完整部署配置。
 
 ### `coding_agent.cli`
@@ -398,6 +400,6 @@ uv --cache-dir .uv-cache run pytest --basetemp .codex-test-tmp -p no:cacheprovid
 - `ruff check`：通过。
 - `mypy`：通过。
 - `mypy src`：通过。
-- `pytest`：124 passed，1 skipped。
+- `pytest`：129 passed，1 skipped。
 
 普通 `uv run pytest` 在 Codex 沙箱账户下可能失败，因为它可能尝试写入 `C:\Users\HP\AppData\Local\Temp\pytest-of-HP`。

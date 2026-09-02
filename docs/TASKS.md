@@ -331,7 +331,36 @@
 - `approvals` 表新增 `schema_version`、`reason`、`expires_at`、`resolution_reason` 和 `resolved_by` 字段，并新增 Alembic migration `0002_add_persistent_approval_queue_fields`。
 - `create_app()` 在检测到 `MySqlSessionStore` 时自动装配 `MySqlApprovalStore`；否则继续使用进程内 store。
 - API 测试新增跨 registry 持久化审批用例，覆盖另一 API registry 查询并 approve 后原 pending request 解挂。
-- 当前仍未持久化 pending patch 内容；进程重启后不能直接应用旧 runtime 内存中的 patch，后续需要单独设计 patch package 持久化。
+- 当前已由后续任务补充 pending patch package 持久化；完整 audit log 和多 worker 锁协调仍未实现。
+
+### 12b. Pending Patch 持久化审批包
+
+状态：已完成。
+
+任务：
+
+让配置 MySQL 后的沙箱待回写 patch 可以作为持久化 package 保存，并在审批通过、实际应用前重新校验。
+
+验收标准：
+
+- 未配置数据库时，当前内存 `PatchRegistry` 行为不回退。
+- 配置 MySQL 后，pending patch 的 patch text、changed files、snapshot hashes、diff preview 和状态可持久化。
+- 新 runtime/registry 可以从同一数据库读取旧 pending patch 并应用。
+- 应用前必须重新执行 patch 结构校验、敏感路径校验、changed files 一致性校验、文件 hash 校验和 `git apply --check`。
+- 审批拒绝时，关联 patch 会标记为 `rejected`。
+- 已应用、已拒绝或已失效的 patch 不能重复应用。
+- 二进制 patch、mode change、rename/copy、submodule、symlink 和 executable patch 仍应拒绝。
+- 自动化测试不依赖真实 DeepSeek API 或真实 MySQL 服务。
+
+完成记录：
+
+- `PatchRegistry` 新增 `PatchStore` 抽象，默认使用 `InMemoryPatchStore`，MySQL 模式使用 `MySqlPatchStore`。
+- `PendingPatch` 记录 patch text、patch sha256、changed files、snapshot file hashes、diff preview、状态、session/run 和应用元数据。
+- `sandbox_shell` 创建 patch 时写入 session/run 上下文；`apply_patch` 审批详情支持异步读取持久化 patch package。
+- `apply_patch` 在应用前将 patch 从 `pending` claim 为 `applying`，再执行结构、路径、hash 和 `git apply --check` 校验，成功后标记 `applied`，失败后标记 `invalidated`。
+- 审批拒绝会把 pending patch 标记为 `rejected`，避免被后续误用。
+- 新增 `patches` 表和 Alembic migration `0003_add_persistent_patch_packages`。
+- 新增 sandbox 和 API 回归测试，覆盖跨 registry 恢复应用、工作区漂移失效、重复应用保护、审批详情读取和批准后写回。
 
 ## P3：知识检索和多 Agent
 

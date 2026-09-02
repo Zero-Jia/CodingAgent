@@ -244,6 +244,7 @@ def test_schema_contains_platform_storage_tables(tmp_path: Path) -> None:
             "transcripts",
             "approvals",
             "artifacts",
+            "patches",
             "model_usage",
         }.issubset(table_names)
     finally:
@@ -268,6 +269,7 @@ def test_alembic_migration_creates_platform_storage_tables(
         approval_columns = {
             column["name"] for column in inspect(engine).get_columns("approvals")
         }
+        patch_columns = {column["name"] for column in inspect(engine).get_columns("patches")}
 
         assert {
             "sessions",
@@ -277,6 +279,7 @@ def test_alembic_migration_creates_platform_storage_tables(
             "transcripts",
             "approvals",
             "artifacts",
+            "patches",
             "model_usage",
             "alembic_version",
         }.issubset(table_names)
@@ -287,6 +290,16 @@ def test_alembic_migration_creates_platform_storage_tables(
             "resolution_reason",
             "resolved_by",
         }.issubset(approval_columns)
+        assert {
+            "patch_id",
+            "status",
+            "patch_text",
+            "patch_sha256",
+            "changed_files",
+            "snapshot_files",
+            "diff_preview",
+            "invalidated_reason",
+        }.issubset(patch_columns)
     finally:
         engine.dispose()
 
