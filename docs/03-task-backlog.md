@@ -12,7 +12,7 @@
 
 | 编号 | 任务 | 状态 | 实际改动文件 | 备注 |
 |---|---|---|---|---|
-| B1-1 | MySQL memory metadata schema + Alembic migration | todo | — | 参考 `db/tables.py` 现有表结构，新增 `memories` 表（id、scope、content、source_session、source_run、confidence、status、created_at、updated_at、expires_at） |
+| B1-1 | MySQL memory metadata schema + Alembic migration | done | `src/coding_agent/db/tables.py`、`migrations/versions/0004_add_memory_metadata.py`、`src/coding_agent/memory/contracts.py`、`src/coding_agent/memory/mysql.py`、`src/coding_agent/memory/__init__.py`、`tests/test_memory_store_contract.py` | 新增 `memories` 表（memory_id、user_id、project_id、scope、category、content、source_session_id FK、source_run_id、confidence、status、reviewer、review_note、created_at、updated_at、reviewed_at、expires_at）；扩展 `MemoryStore` Protocol（store/get/list_by_status/update_status/list_promoted/search）+ `MySqlMemoryStore` 实现 + `NoopMemoryStore`；15 个契约测试（含 schema、migration upgrade/downgrade、MySQL DDL 编译）。未实现 Milvus、extraction、recall |
 | B1-2 | Milvus memory vector collection | todo | — | 复用现有 `semantic/milvus.py` 模式，新增 memory collection（embedding + memory_id metadata） |
 | B1-3 | Memory extraction（从 session 提取候选记忆） | todo | — | 从 session events / trace 中提取项目约定、用户偏好、历史修复；候选状态待审核 |
 | B1-4 | 人工审核 promotion 流程 | todo | — | 候选记忆 → 人工确认 → promoted；提供 CLI 审核命令 |

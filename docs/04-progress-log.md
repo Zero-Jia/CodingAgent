@@ -20,6 +20,39 @@
 
 ---
 
+### Session 2026-09-05（Memory metadata schema + Alembic migration）
+
+- **目标**：完成 B1-1，为 Memory 系统打地基。只实现 MySQL/SQLite metadata 层，不实现 Milvus 向量召回、自动 extraction 与 recall 注入
+- **完成任务**：
+  - [B1-1] MySQL memory metadata schema + Alembic migration — 改动文件：
+    - `src/coding_agent/db/tables.py`：新增 `memories` 表（memory_id PK、schema_version、user_id、project_id、scope、category、content LONGTEXT、source_session_id FK→sessions、source_run_id、confidence、status、reviewer、review_note、created_at、updated_at、reviewed_at、expires_at；4 个索引：source_session_id、status、scope、user+project+status 联合）；加入 `schema_tables` 与 `__all__`
+    - `migrations/versions/0004_add_memory_metadata.py`：Alembic upgrade/downgrade，`down_revision=0003_add_persistent_patch_packages`
+    - `src/coding_agent/memory/contracts.py`：扩充 `MemoryStore` Protocol（store/get/list_by_status/update_status/list_promoted/search，关键字参数）；新增 `MemoryStatus`（candidate/promoted/rejected/expired）与 `MemoryScope`（session/project/user）常量；`MemoryRecord` 补 source_run_id/reviewer/review_note/reviewed_at；`NoopMemoryStore` 同步补全为降级实现
+    - `src/coding_agent/memory/mysql.py`：`MySqlMemoryStore` 实现，SQLAlchemy Core + `asyncio.to_thread`，遵循 `MySqlSessionStore` 范式（dialect 无关，SQLite 可跑契约测试）
+    - `src/coding_agent/memory/__init__.py`：导出新类型
+    - `tests/test_memory_store_contract.py`：15 个契约测试（store/get 往返、list_by_status 排序与隔离、update_status promote+stamp、list_promoted scope 过滤、search 大小写不敏感+status 过滤、Noop 降级、schema 含 memories、alembic upgrade/downgrade、MySQL DDL 编译校验）
+- **关键决策**：
+  - `review_note` 为 Text 列，遵循现有约定「Text 列只给 `default=`（Python 端），不给 `server_default`」——MySQL 不允许 TEXT 带 DEFAULT，`test_schema_compiles_for_mysql_without_text_defaults` 强制此约束
+  - `source_session_id` FK→sessions(ondelete CASCADE)；store 不主动 `_ensure_session`，由 extraction（B1-3）保证 session 已存在，FK 违背直接抛 IntegrityError，避免 memory 模块反向耦合 sessions 模块
+  - `MemoryStore.search` 签名由位置参数改为关键字参数并新增 `status` 过滤（默认只检索 promoted）；现有代码无任何调用方，签名变更无破坏性
+  - `update_status` 对不存在的 memory_id 静默无操作（UPDATE 影响 0 行不抛错），便于幂等重试
+- **遇到的问题**：
+  - 初版给 `review_note` 误加 `server_default=""`，触发 `test_schema_compiles_for_mysql_without_text_defaults` 失败；按现有 Text 列约定移除后通过
+  - 测试断言 `after.updated_at >= before.updated_at` 用了固定假时间戳 12:00，而 `update_status` 用真实 now()（06:05），导致失败；改为校验 `updated_at` 已变化且等于 `reviewed_at`
+  - ruff 全量扫描误报 `.codex-test-tmp-*` 临时目录里的测试夹具 `.py` 文件（非规范 basetemp 名未进 .gitignore）；清理临时目录后通过。后续必须严格用 `--basetemp .codex-test-tmp`（gitignored）
+- **验证结果**：
+  - ruff check：All checks passed
+  - mypy（全量）：Success, 59 source files
+  - mypy src：Success, 59 source files
+  - pytest：151 passed, 1 skipped（基线 136/2 → +15 新增 memory 测试；语义真实集成 smoke test 仍 skipped）
+- **未完成/遗留**：
+  - 未接入 runtime：`MemoryStore` 尚未被 `agent/coding_agent.py` 或 `runtime/` 引用，B1-5 recall 注入时再装配
+  - 未实现 CLI 审核命令（B1-4）
+  - 未实现 Milvus memory collection（B1-2）
+- **下一步建议**：B1-2（Milvus memory vector collection）或 B1-3（extraction）。B1-3 不依赖 Milvus，可直接基于本 session 的 `MySqlMemoryStore` 从 session events 提取候选记忆写入；B1-2 复用 `semantic/milvus.py` 模式新增 memory collection。建议先做 B1-3（无外部依赖、与用户 RAG 背景契合、能跑通端到端候选写入），B1-2 之后做
+
+---
+
 ### Session 2026-09-02（真实 DashScope/Milvus 语义索引第一版）
 
 - **目标**：完成代码语义索引第一版，不实现 Redis、memory recall、多 agent、Tree-sitter 或生产级 Web UI

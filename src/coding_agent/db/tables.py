@@ -260,6 +260,56 @@ model_usage = Table(
     mysql_charset="utf8mb4",
 )
 
+memories = Table(
+    "memories",
+    metadata,
+    Column("memory_id", String(128), primary_key=True),
+    Column("schema_version", Integer, nullable=False, default=1, server_default="1"),
+    Column("user_id", String(128), nullable=False, server_default=""),
+    Column("project_id", String(128), nullable=False, server_default=""),
+    Column("scope", String(64), nullable=False, default="session", server_default="session"),
+    Column("category", String(64), nullable=False, default="general", server_default="general"),
+    Column(
+        "content",
+        Text().with_variant(mysql.LONGTEXT(), "mysql"),
+        nullable=False,
+    ),
+    Column(
+        "source_session_id",
+        String(128),
+        ForeignKey("sessions.session_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("source_run_id", String(128), nullable=False, server_default=""),
+    Column("confidence", Float, nullable=False, default=0.5, server_default="0.5"),
+    Column(
+        "status",
+        String(32),
+        nullable=False,
+        default="candidate",
+        server_default="candidate",
+    ),
+    Column("reviewer", String(128), nullable=False, default="", server_default=""),
+    Column("review_note", Text, nullable=False, default=""),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column("reviewed_at", DateTime(timezone=True), nullable=True),
+    Column("expires_at", DateTime(timezone=True), nullable=True),
+    mysql_engine="InnoDB",
+    mysql_charset="utf8mb4",
+)
+
 schema_tables = (
     sessions,
     runs,
@@ -270,12 +320,14 @@ schema_tables = (
     artifacts,
     patches,
     model_usage,
+    memories,
 )
 
 __all__ = [
     "approvals",
     "artifacts",
     "checkpoints",
+    "memories",
     "metadata",
     "model_usage",
     "patches",

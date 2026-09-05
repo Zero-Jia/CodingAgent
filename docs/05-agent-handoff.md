@@ -8,21 +8,22 @@
 
 - 项目已完成安全优先 Coding Agent MVP（安全内核 + Runtime + MySQL 存储 + Milvus 语义索引）
 - 文档体系已重构为编号格式（`/docs/00-*.md` ~ `09-*.md`）
-- **当前阶段：Phase B 高辨识度能力**，优先做 Memory 系统（B1），再做 MCP（B2）和多 Agent（B3）
+- **当前阶段：Phase B 高辨识度能力**，Memory 系统进行中
 - 安全内核完整：Docker 无网络沙箱 + 快照过滤 + patch-only 写回 + 审批流 + 命令风险检测
-- 测试基线：136 passed，2 skipped；ruff + mypy strict 全通过
+- **B1-1 已完成**：`memories` 表 + Alembic migration 0004 + `MemoryStore` Protocol（store/get/list_by_status/update_status/list_promoted/search）+ `MySqlMemoryStore` + `NoopMemoryStore` + 15 个契约测试。MemoryStore 尚未接入 runtime
+- 测试基线：151 passed，1 skipped；ruff + mypy strict 全通过（59 source files）
 
 ## 下一步优先做什么
 
-**Phase B1：Memory 系统**（和用户 RAG/LangGraph/ChromaDB 背景契合，复用现有 Milvus + MySQL 基础设施）
+**Phase B1：Memory 系统**（B1-1 已完成，继续 B1-2 ~ B1-6）
 
 推荐推进顺序：
-1. **B1-1**：MySQL memory metadata schema + Alembic migration
-2. **B1-2**：Milvus memory vector collection
-3. **B1-3**：Memory extraction（从 session 提取候选记忆）
-4. **B1-4**：人工审核 promotion 流程
-5. **B1-5**：Memory recall 注入 runtime context
-6. **B1-6**：记忆过期与置信度管理
+1. ~~B1-1：MySQL memory metadata schema + Alembic migration~~ ✅ done
+2. **B1-3：Memory extraction**（推荐先做，无外部依赖，基于 B1-1 的 `MySqlMemoryStore` 从 session events 提取候选记忆写入，能跑通端到端候选写入；与用户 RAG 背景契合）
+3. **B1-2：Milvus memory vector collection**（复用 `semantic/milvus.py` 模式新增 memory collection）
+4. **B1-4**：人工审核 promotion 流程（候选 → promoted，CLI 审核命令）
+5. **B1-5**：Memory recall 注入 runtime context（任务开始召回高置信记忆注入系统上下文）
+6. **B1-6**：记忆过期与置信度管理（TTL、置信度衰减、去重合并）
 
 每个任务应在 1-2 个 session 内完成，必须包含测试、文档更新和验证记录。
 
