@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 
@@ -189,11 +190,57 @@ class NoopMemoryStore:
         return []
 
 
+class MemoryVectorHit(BaseModel):
+    """语义召回的单条记忆命中。"""
+
+    memory_id: str
+    content: str
+    score: float
+
+
+class MemoryVectorIndex(Protocol):
+    """记忆向量索引协议（B1-2）。
+
+    实现方需要保证：
+    - ``upsert`` 以 ``memory_id`` 为主键幂等写入，content 作为 embedding 源文本
+    - ``search`` 按 ``user_id`` + ``project_id`` 过滤，返回余弦相似度降序的命中
+    - 只索引 ``promoted`` 状态记忆（由调用方保证，index 层不校验状态）
+    """
+
+    backend_name: str
+    collection_name: str
+
+    async def ensure_collection(self, dimension: int) -> None:
+        """创建 collection（若不存在）并校验维度。"""
+        ...
+
+    async def upsert(
+        self,
+        records: Sequence[MemoryRecord],
+        vectors: Sequence[Sequence[float]],
+    ) -> None:
+        """批量写入记忆向量，以 ``memory_id`` 为主键幂等覆盖。"""
+        ...
+
+    async def search(
+        self,
+        vector: Sequence[float],
+        *,
+        user_id: str,
+        project_id: str,
+        top_k: int,
+    ) -> list[MemoryVectorHit]:
+        """按向量语义搜索，返回 top-k 命中。"""
+        ...
+
+
 __all__ = [
     "MemoryCategory",
     "MemoryRecord",
     "MemoryScope",
     "MemoryStatus",
     "MemoryStore",
+    "MemoryVectorHit",
+    "MemoryVectorIndex",
     "NoopMemoryStore",
 ]

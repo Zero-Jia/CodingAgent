@@ -14,8 +14,10 @@ from coding_agent.config import AgentConfig
 from coding_agent.db import check_database_url, database_health_text
 from coding_agent.memory import (
     MemoryExtractor,
+    MemoryReviewService,
     ModelExtractor,
     NoopMemoryStore,
+    ReviewError,
     persist_candidates,
 )
 from coding_agent.runtime.events import AgentEvent
@@ -316,6 +318,129 @@ def extract_memories(
                 f"跳过（已存在）：{skipped}",
             ]
         )
+    )
+
+
+@app.command("review-memories")
+def review_memories(
+    reviewer: Annotated[
+        str, typer.Option("--reviewer", help="审核人标识，写入记忆的 reviewer 字段用于审计。")
+    ],
+    workspace: Annotated[Path, typer.Option("--workspace", exists=True, file_okay=False)] = Path(
+        "."
+    ),
+    user_id: Annotated[
+        str, typer.Option("--user-id", help="记忆归属用户 ID。")
+    ] = "",
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="记忆归属项目 ID；默认取 workspace 绝对路径。"),
+    ] = None,
+    storage_backend: Annotated[
+        str | None, typer.Option("--storage", help="Session storage backend: jsonl or mysql.")
+    ] = None,
+    database_url: Annotated[
+        str | None, typer.Option("--database-url", help="SQLAlchemy database URL for memories.")
+    ] = None,
+    database_create_schema: Annotated[
+        bool,
+        typer.Option(
+            "--database-create-schema",
+            help="Create database tables at startup for local development and tests.",
+        ),
+    ] = False,
+) -> None:
+    """逐条审核候选记忆：promote 为 promoted 或 reject 为 rejected。"""
+    overrides: dict[str, object] = {}
+    if storage_backend is not None:
+        overrides["storage_backend"] = storage_backend
+    if database_url is not None:
+        overrides["database_url"] = database_url
+    if database_create_schema:
+        overrides["database_create_schema"] = True
+    config = AgentConfig.from_environment(workspace, **overrides)
+    data_root = config.workspace / ".coding-agent"
+
+    try:
+        memory_store = create_memory_store(config, data_root)
+    except StorageConfigError as error:
+        raise typer.BadParameter(str(error), param_hint="--database-url") from error
+
+    if isinstance(memory_store, NoopMemoryStore):
+        typer.echo(
+            "存储后端为 jsonl，记忆审核需要 mysql（--database-url）；无法进行审核。",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    effective_project_id = project_id or str(config.workspace.resolve())
+    service = MemoryReviewService(memory_store)
+    candidates = asyncio.run(
+        service.list_candidates(user_id=user_id, project_id=effective_project_id)
+    )
+
+    if not candidates:
+        typer.echo("没有待审核的候选记忆。")
+        return
+
+    typer.echo(f"待审核候选：{len(candidates)} 条\n")
+
+    promoted = 0
+    rejected = 0
+    skipped = 0
+    for index, record in enumerate(candidates, start=1):
+        typer.echo("─" * 60)
+        typer.echo(
+            f"[{index}/{len(candidates)}] id={record.memory_id[:12]}  "
+            f"category={record.category}  confidence={record.confidence:.2f}"
+        )
+        typer.echo(f"  scope={record.scope}  source_session={record.source_session_id}")
+        typer.echo(f"  content: {record.content}")
+        choice = typer.prompt(
+            "操作 [p]romote / [r]eject / [s]kip / [q]uit",
+            default="s",
+        ).strip().lower()
+
+        if choice == "q":
+            typer.echo("\n已退出审核。")
+            break
+        if choice == "s":
+            skipped += 1
+            continue
+        if choice not in ("p", "r"):
+            typer.echo(f"  未知操作 {choice!r}，按 skip 处理。")
+            skipped += 1
+            continue
+
+        note = typer.prompt("审核备注（可留空）", default="").strip()
+        try:
+            if choice == "p":
+                asyncio.run(
+                    service.promote(
+                        memory_id=record.memory_id,
+                        reviewer=reviewer,
+                        review_note=note,
+                    )
+                )
+                promoted += 1
+                typer.echo("  → promoted")
+            else:
+                asyncio.run(
+                    service.reject(
+                        memory_id=record.memory_id,
+                        reviewer=reviewer,
+                        review_note=note,
+                    )
+                )
+                rejected += 1
+                typer.echo("  → rejected")
+        except ReviewError as error:
+            typer.echo(f"  审核失败：{error}", err=True)
+            skipped += 1
+
+    typer.echo("\n" + "─" * 60)
+    typer.echo(
+        f"审核完成：promoted={promoted}  rejected={rejected}  skipped={skipped}"
     )
 
 

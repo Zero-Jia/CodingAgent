@@ -11,19 +11,21 @@
 - **当前阶段：Phase B 高辨识度能力**，Memory 系统进行中
 - 安全内核完整：Docker 无网络沙箱 + 快照过滤 + patch-only 写回 + 审批流 + 命令风险检测
 - **B1-1 已完成**：`memories` 表 + Alembic migration 0004 + `MemoryStore` Protocol（store/get/list_by_status/update_status/list_promoted/search）+ `MySqlMemoryStore` + `NoopMemoryStore` + 15 个契约测试。MemoryStore 尚未接入 runtime
-- **B1-3 已完成**：混合式候选记忆提取（`RuleExtractor` 线索词匹配 + `ModelExtractor` 模型自主判断规则未命中部分）+ `MemoryExtractor` 编排去重 + `persist_candidates` 幂等去重 + `create_memory_store` 工厂 + CLI `extract-memories --no-model`。22 个测试。提取是离线 CLI，未接入 runtime；候选写入后无审核入口
-- 测试基线：173 passed，1 skipped；ruff + mypy strict 全通过（60 source files）
+- **B1-2 已完成**：`MemoryVectorIndex` Protocol（ensure_collection/upsert/search）+ `MemoryVectorHit` + `MilvusMemoryVectorIndex`（独立 collection，schema: memory_id/user_id/project_id/scope/category/content/embedding，COSINE，按 user+project 过滤）+ `InMemoryMemoryVectorIndex`；config 新增 `milvus_memory_collection`。8 个测试。向量召回能力就绪，待 B1-5 消费
+- **B1-3 已完成**：混合式候选记忆提取（`RuleExtractor` 线索词匹配 + `ModelExtractor` 模型自主判断规则未命中部分）+ `MemoryExtractor` 编排去重 + `persist_candidates` 幂等去重 + `create_memory_store` 工厂 + CLI `extract-memories --no-model`。22 个测试。提取是离线 CLI，未接入 runtime
+- **B1-4 已完成**：`MemoryReviewService`（`list_candidates`/`promote`/`reject`/`review`）+ `ReviewError` + CLI `review-memories --reviewer` 逐条交互审核。审核只允许 `candidate -> promoted/rejected`，校验记忆存在/状态为 candidate/reviewer 非空。9 个测试。闭合"提取→审核→promoted"链路
+- 测试基线：190 passed，1 skipped；ruff + mypy strict 全通过（62 source files）
 
 ## 下一步优先做什么
 
-**Phase B1：Memory 系统**（B1-1、B1-3 已完成，继续 B1-2 / B1-4 ~ B1-6）
+**Phase B1：Memory 系统**（B1-1、B1-2、B1-3、B1-4 已完成，继续 B1-5 / B1-6）
 
 推荐推进顺序：
 1. ~~B1-1：MySQL memory metadata schema + Alembic migration~~ ✅ done
-2. ~~B1-3：Memory extraction（混合式提取）~~ ✅ done
-3. **B1-4：人工审核 promotion 流程**（推荐先做，无外部依赖，闭合"提取→审核→promoted"链路；本轮已产出大量 candidate，需要审核入口才能 promote 供 recall 使用）
-4. **B1-2：Milvus memory vector collection**（复用 `semantic/milvus.py` 模式新增 memory collection，让 recall 支持语义召回）
-5. **B1-5**：Memory recall 注入 runtime context（任务开始召回高置信 promoted 记忆注入系统上下文）
+2. ~~B1-2：Milvus memory vector collection~~ ✅ done
+3. ~~B1-3：Memory extraction（混合式提取）~~ ✅ done
+4. ~~B1-4：人工审核 promotion 流程~~ ✅ done
+5. **B1-5：Memory recall 注入 runtime context**（推荐先做，闭合 Memory 端到端链路：任务开始时根据 query 召回高置信 promoted 记忆，语义召回走 B1-2 `MemoryVectorIndex.search`，metadata 保底走 `MemoryStore.search`，注入系统上下文）
 6. **B1-6**：记忆过期与置信度管理（TTL、置信度衰减、去重合并；收紧 B1-3 的 `source_session_id` FK CASCADE 限制）
 
 每个任务应在 1-2 个 session 内完成，必须包含测试、文档更新和验证记录。

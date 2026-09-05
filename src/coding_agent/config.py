@@ -140,6 +140,10 @@ class AgentConfig(BaseModel):
                 "milvus_collection",
                 env.get("CODING_AGENT_MILVUS_COLLECTION", "coding_agent_code_chunks"),
             ),
+            "milvus_memory_collection": overrides.pop(
+                "milvus_memory_collection",
+                env.get("CODING_AGENT_MILVUS_MEMORY_COLLECTION", "coding_agent_memories"),
+            ),
             "semantic_top_k": overrides.pop(
                 "semantic_top_k", _env_int(env, "CODING_AGENT_SEMANTIC_TOP_K", 8)
             ),

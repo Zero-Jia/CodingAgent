@@ -20,6 +20,64 @@
 
 ---
 
+### Session 2026-09-05（Milvus memory vector collection）
+
+- **目标**：完成 B1-2，为 promoted 记忆建立独立 Milvus collection，提供语义召回能力。复用 `semantic/milvus.py` 模式，不实现 recall 注入 runtime（B1-5）、过期管理（B1-6）
+- **完成任务**：
+  - [B1-2] Milvus memory vector collection — 改动文件：
+    - `src/coding_agent/memory/contracts.py`：新增 `MemoryVectorHit`（memory_id/content/score）+ `MemoryVectorIndex` Protocol（`ensure_collection`/`upsert`/`search`）；search 按 user_id + project_id 过滤，返回余弦相似度降序命中
+    - `src/coding_agent/memory/vector.py`（新）：`MilvusMemoryVectorIndex`（schema: memory_id VARCHAR PK / user_id / project_id / scope / category / content VARCHAR(8192) / embedding FLOAT_VECTOR COSINE AUTOINDEX；filter 表达式转义双引号与反斜杠）+ `InMemoryMemoryVectorIndex`（纯 Python 余弦相似度，测试用）；复用 `semantic/milvus.py` 的 `_entity`/`_score`/`_embedding_dimension`/`_safe_error` 辅助函数模式
+    - `src/coding_agent/memory/__init__.py`：导出 `MemoryVectorHit`/`MemoryVectorIndex`/`MilvusMemoryVectorIndex`/`InMemoryMemoryVectorIndex`
+    - `src/coding_agent/config.py`：新增 `milvus_memory_collection` 字段（默认 `coding_agent_memories`）+ 环境变量 `CODING_AGENT_MILVUS_MEMORY_COLLECTION`
+    - `tests/test_memory_vector.py`（新）：8 个测试（upsert+search 基本召回、按 user+project 过滤、余弦相似度降序、top_k 截断、同 memory_id 幂等覆盖、长度不匹配抛错、维度不匹配抛错、空库返回空）
+- **关键决策**：
+  - **独立 collection 而非复用 code_chunks**：记忆与代码语义空间不同（记忆是自然语言偏好/约定，代码是符号语义），分开 collection 避免向量空间混淆，且记忆需要 user/project 过滤维度
+  - **schema 字段精简**：只存召回必需字段（memory_id/user_id/project_id/scope/category/content/embedding），不冗余存储 confidence/status 等（这些在 MySQL memories 表，通过 memory_id 关联）
+  - **只索引 promoted 记忆由调用方保证**：index 层不校验状态，B1-5/CLI 在 upsert 前从 store 取 promoted 记录；保持 index 层无状态依赖
+  - **filter 转义**：user_id/project_id 可能含特殊字符，`_escape_filter` 转义双引号与反斜杠，避免 Milvus filter 注入
+- **遇到的问题**：
+  - 并行 Edit 同一文件时偶发部分 edit 不生效（MemoryVectorIndex 未使用导入未被移除），改为串行 edit 后解决
+- **验证结果**：
+  - ruff check：All checks passed
+  - mypy（全量 src）：Success, 62 source files
+  - pytest：190 passed, 1 skipped（基线 182/1 → +8 新增 vector 测试）
+- **未完成/遗留**：
+  - 未实现"把 promoted 记忆批量写入向量索引"的 service/CLI（B1-5 或单独小任务可加：遍历 store.list_promoted → embed → index.upsert）
+  - 未实现 recall 注入 runtime（B1-5）：向量索引能力已就绪，B1-5 可直接消费 `MemoryVectorIndex.search`
+  - Milvus 真实集成 smoke test 未写（仅 InMemory 覆盖）；按语义索引惯例后续可加 `RUN_REAL_MEMORY_VECTOR_TESTS=1` 门控
+- **下一步建议**：B1-5（Memory recall 注入 runtime context）—— 向量索引（B1-2）与审核（B1-4）均已就绪，可在任务开始时召回高置信 promoted 记忆（语义召回 + metadata 保底）注入系统上下文，闭合 Memory 端到端链路
+
+---
+
+### Session 2026-09-05（Memory 人工审核 promotion 流程）
+
+- **目标**：完成 B1-4，为 B1-3 产出的候选记忆提供人工审核入口（promote 为 promoted / reject 为 rejected），闭合"提取→审核→promoted"链路。不实现 Milvus 向量召回（B1-2）、recall 注入（B1-5）、过期管理（B1-6）
+- **完成任务**：
+  - [B1-4] 人工审核 promotion 流程 — 改动文件：
+    - `src/coding_agent/memory/review.py`（新）：`MemoryReviewService`（`list_candidates`/`promote`/`reject`/`review`）+ `ReviewError`。审核只允许 `candidate -> promoted/rejected`；`review` 校验：目标状态合法、reviewer 非空、记忆存在且当前状态为 candidate；调用 `store.update_status` 后 `get` 返回更新后记录
+    - `src/coding_agent/memory/__init__.py`：导出 `MemoryReviewService`、`ReviewError`
+    - `src/coding_agent/cli/app.py`：新增 `review-memories --reviewer [--user-id] [--project-id] [--storage/--database-url/--database-create-schema]` 命令；逐条展示 candidate（category/confidence/content/source_session），交互 `[p]romote/[r]eject/[s]kip/[q]uit` + 审核备注；jsonl 后端提示需 mysql 并退出；统计 promoted/rejected/skipped
+    - `tests/test_memory_review.py`（新）：9 个测试（list_candidates 只返回 candidate；promote/reject 状态流转+reviewer/note/reviewed_at 写入；重复审核已 promoted 抛错；审核不存在记忆抛错；非法目标状态抛错；空 reviewer 抛错；promoted 后从 candidate 列表消失；NoopStore promote 抛 ReviewError）
+- **关键决策**：
+  - **抽离 `MemoryReviewService` 服务层**：审核状态流转与校验逻辑放在 `memory/review.py`，CLI 只负责交互展示与收集决定，符合决策 5（CLI 保持薄客户端）
+  - **审核只允许 candidate 出发**：`candidate -> promoted` 或 `candidate -> rejected`，防止对已审核记忆重复操作或跳过审核直接改状态；已 promoted/rejected 的记忆再次审核抛 `ReviewError`
+  - **reviewer 非空校验**：保证审计可追溯，空字符串或纯空格均拒绝
+  - **复用现有 `MemoryStore.update_status`**：B1-1 已实现该方法（写 status/reviewer/review_note/reviewed_at/updated_at），B1-4 无需改 schema 或 store，无 Alembic migration
+- **遇到的问题**：
+  - mypy strict 要求测试文件中所有函数有类型注解，`_create_engine`/`_ensure_session` 需补 `-> Engine` 和 `engine: Engine`（与 `test_memory_store_contract.py` 保持一致）
+- **验证结果**：
+  - ruff check：All checks passed
+  - mypy（全量 src）：Success, 61 source files
+  - pytest：182 passed, 1 skipped（基线 173/1 → +9 新增 review 测试）
+- **未完成/遗留**：
+  - 未实现 Milvus memory collection（B1-2）：recall 仍只能基于 metadata search（SQL LIKE）
+  - 未实现 recall 注入 runtime（B1-5）：promoted 记忆尚未被 runtime 消费
+  - 未实现记忆过期与置信度管理（B1-6）
+  - CLI 审核是逐条交互，无批量 promote-all 快捷操作（后续按需加）
+- **下一步建议**：B1-2（Milvus memory vector collection，复用 `semantic/milvus.py` 模式）或 B1-5（Memory recall 注入 runtime context）。建议先做 B1-2，为 B1-5 recall 提供语义召回能力；若优先闭合端到端链路，也可先做 B1-5（基于现有 metadata search 保底）
+
+---
+
 ### Session 2026-09-05（Memory extraction 混合式提取）
 
 - **目标**：完成 B1-3，实现"规则优先、模型补位"的候选记忆提取，从 session checkpoint 对话提取候选记忆写入 `MemoryStore`，不实现 Milvus 向量召回（B1-2）、审核 CLI（B1-4）、recall 注入（B1-5）
