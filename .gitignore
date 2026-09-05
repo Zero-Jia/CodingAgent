@@ -9,3 +9,4 @@ __pycache__/
 .pytest-tmp/
 .coding-agent/
 .env
+volumes/

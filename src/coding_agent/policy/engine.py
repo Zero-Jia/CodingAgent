@@ -36,7 +36,7 @@ class PolicyEngine:
             return PolicyDecision("deny", "path is outside the workspace")
         if self.paths.is_protected(path):
             return PolicyDecision("deny", "sensitive or internal file access is denied")
-        if tool_name in {"read", "search", "git_diff"}:
+        if tool_name in {"read", "search", "git_diff", "semantic_search"}:
             return PolicyDecision("allow", "bounded read-only workspace operation")
         return self._authorization("write operation", self.allow_write)
 
@@ -71,7 +71,7 @@ class PolicyEngine:
             return self._authorization("patch application", self.allow_write)
         if tool_name == "shell":
             return PolicyDecision("deny", "host shell execution is disabled; use sandbox_shell")
-        if tool_name in {"search", "git_diff", "submit_plan"}:
+        if tool_name in {"search", "git_diff", "semantic_search", "submit_plan"}:
             return PolicyDecision("allow", "read-only workspace operation")
         return PolicyDecision("deny", f"unknown tool: {tool_name}")
 

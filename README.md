@@ -9,6 +9,7 @@
 ```powershell
 uv sync --all-groups
 $env:DEEPSEEK_API_KEY = "你的本地密钥"
+$env:DASHSCOPE_API_KEY = "你的 DashScope API Key"
 
 # Docker Desktop 使用 Linux containers，并在项目根目录构建固定的沙箱镜像
 docker build -f Dockerfile.sandbox -t coding-agent-sandbox:python-3.12 .
@@ -27,6 +28,12 @@ uv run agent chat --workspace . --plan
 
 # 显式选择模型 provider 和模型名；当前已实现 provider 为 deepseek
 uv run agent chat --workspace . --provider deepseek --model deepseek-chat
+
+# 构建真实 Milvus 语义索引；需要本机 Milvus Standalone 已启动，且 DashScope 参数已配置
+uv run agent index-workspace --workspace .
+
+# 直接查询真实语义索引
+uv run agent semantic-search "patch approval flow" --workspace . --top-k 5
 
 # 启动最小 FastAPI 服务；默认从环境变量读取模型配置
 uv run uvicorn coding_agent.api.app:create_app --factory --host 127.0.0.1 --port 8000
@@ -80,6 +87,44 @@ $env:CODING_AGENT_SANDBOX_IMAGE = "coding-agent-sandbox:python-3.12"
 `CODING_AGENT_MODEL_PROVIDER` 决定使用哪个模型适配器，`CODING_AGENT_MODEL` 决定传给该 provider 的具体模型名。当前版本只实现 `deepseek` provider；不设置 provider 时默认使用 `deepseek`，不设置模型名时默认使用 `deepseek-chat`。`DEEPSEEK_MODEL` 仍作为 DeepSeek 专属模型名回退变量保留。
 
 DeepSeek 适配器使用兼容 OpenAI 的 Chat Completions SSE 协议。所有 Agent 运行均使用真实模型配置。
+
+项目会在读取进程环境变量前加载工作区根目录的 `.env` 文件；同名的真实进程环境变量优先级更高。
+`.env` 已被 `.gitignore` 忽略，适合保存本机私密参数；不要提交真实密钥。
+
+## Milvus 语义索引
+
+语义索引使用真实 Milvus 向量库和阿里 DashScope `qwen3.7-text-embedding`。本地开发推荐先用
+Docker Desktop 启动 Milvus Standalone，并确认 `http://127.0.0.1:19530` 可连接。
+
+`.env.example` 中提供了示例变量：
+
+```powershell
+$env:DASHSCOPE_API_KEY = "你的 DashScope API Key"
+$env:DASHSCOPE_BASE_URL = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+$env:DASHSCOPE_EMBEDDING_MODEL = "qwen3.7-text-embedding"
+$env:DASHSCOPE_EMBEDDING_DIMENSIONS = "1024"
+$env:DASHSCOPE_EMBEDDING_BATCH_SIZE = "10"
+$env:CODING_AGENT_SEMANTIC_BACKEND = "milvus"
+$env:CODING_AGENT_MILVUS_URI = "http://127.0.0.1:19530"
+$env:CODING_AGENT_MILVUS_COLLECTION = "coding_agent_code_chunks"
+```
+
+构建索引：
+
+```powershell
+uv --cache-dir .uv-cache run agent index-workspace --workspace .
+```
+
+查询索引：
+
+```powershell
+uv --cache-dir .uv-cache run agent semantic-search "runtime approval patch" --workspace . --top-k 5
+```
+
+`semantic_search` 作为只读模型工具在 `CODING_AGENT_SEMANTIC_BACKEND=milvus` 且 DashScope 配置有效时
+注册到 runtime。索引器只处理 `WorkspacePathPolicy` 允许的文本文件，继续排除 `.env*`、`.git`、
+`.coding-agent`、凭据目录、私钥、缓存、虚拟环境和超大文件。检索结果会标记 `stale`，表示 Milvus 中的
+chunk 来源文件 hash 已不同于当前工作区文件；编辑或精确引用前仍必须重新 `read` 当前文件。
 
 ## 存储配置
 

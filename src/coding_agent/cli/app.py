@@ -14,6 +14,8 @@ from coding_agent.config import AgentConfig
 from coding_agent.db import check_database_url, database_health_text
 from coding_agent.runtime.events import AgentEvent
 from coding_agent.runtime.loop import ApprovalProvider
+from coding_agent.semantic.contracts import SemanticIndexError
+from coding_agent.semantic.service import create_semantic_service
 from coding_agent.sessions.factory import StorageConfigError, create_session_store
 from coding_agent.sessions.lock import SessionLockedError, acquire_session_lock
 from coding_agent.sessions.store import SessionEvent, SessionStore
@@ -158,6 +160,49 @@ def db_check(
     typer.echo(database_health_text(health))
     if not health.ok:
         raise typer.Exit(code=1)
+
+
+@app.command("index-workspace")
+def index_workspace(
+    workspace: Annotated[Path, typer.Option("--workspace", exists=True, file_okay=False)] = Path(
+        "."
+    ),
+) -> None:
+    """使用 DashScope embedding 将当前工作区代码索引到 Milvus。"""
+    config = AgentConfig.from_environment(workspace)
+    try:
+        stats = asyncio.run(create_semantic_service(config).build_index())
+    except SemanticIndexError as error:
+        raise typer.BadParameter(str(error), param_hint="semantic config") from error
+    typer.echo(
+        "\n".join(
+            [
+                f"后端：{stats.backend}",
+                f"Collection：{stats.collection}",
+                f"索引文件：{stats.indexed_files}",
+                f"索引 chunk：{stats.indexed_chunks}",
+                f"跳过文件：{stats.skipped_files}",
+            ]
+        )
+    )
+
+
+@app.command("semantic-search")
+def semantic_search_command(
+    query: str,
+    workspace: Annotated[Path, typer.Option("--workspace", exists=True, file_okay=False)] = Path(
+        "."
+    ),
+    top_k: Annotated[int | None, typer.Option("--top-k", min=1, max=50)] = None,
+) -> None:
+    """查询 Milvus 中的真实工作区语义索引。"""
+    config = AgentConfig.from_environment(workspace)
+    try:
+        service = create_semantic_service(config)
+        hits = asyncio.run(service.search(query, top_k=top_k))
+    except SemanticIndexError as error:
+        raise typer.BadParameter(str(error), param_hint="semantic config") from error
+    typer.echo(service.format_hits(hits))
 
 
 @app.command()

@@ -2,7 +2,7 @@
 
 本文档描述的是以当前 `CodingAgent` 项目为基础，参考 `D:\Software\MewCode` 的完整 agent 运行时能力，并按照企业级 coding agent 的工程标准继续演进后的目标形态。
 
-当前项目已经具备一个安全优先的本地 coding agent 内核：Python 包结构清晰，支持 DeepSeek 模型调用、事件驱动运行时、只读工具、Docker 无网络沙箱、补丁注册与审批回写、默认 JSONL 会话与追踪存储、可配置 SQLAlchemy/MySQL 会话存储、MySQL-backed API approval queue、MySQL-backed pending patch package、脱敏 artifact、基础测试和严格类型检查。后续完整形态不是简单扩展一个 CLI 工具，而是将其升级为一个可审计、可扩展、可部署、支持团队协作和多模型接入的企业级 agent 平台。
+当前项目已经具备一个安全优先的本地 coding agent 内核：Python 包结构清晰，支持 DeepSeek 模型调用、事件驱动运行时、只读工具、Docker 无网络沙箱、补丁注册与审批回写、默认 JSONL 会话与追踪存储、可配置 SQLAlchemy/MySQL 会话存储、MySQL-backed API approval queue、MySQL-backed pending patch package、真实 DashScope/Milvus 代码语义索引、脱敏 artifact、基础测试和严格类型检查。后续完整形态不是简单扩展一个 CLI 工具，而是将其升级为一个可审计、可扩展、可部署、支持团队协作和多模型接入的企业级 agent 平台。
 
 ## 1. 项目整体定位
 
@@ -783,8 +783,9 @@ Redis 中建议保存：
 
 任务：
 
-- Milvus 向量库。
-- 代码语义索引。
+- 已完成第一版：Milvus 代码向量库。
+- 已完成第一版：代码语义索引。
+- memory 向量 collection。
 - memory extraction。
 - memory recall。
 - multi-agent orchestration。
@@ -893,7 +894,7 @@ src/coding_agent/
 
 `CodingAgent` 的最终形态不是一个简单的“命令行套壳大模型”，而是一个围绕安全执行、受控写回、上下文管理、可观测性、插件生态和多 agent 协作构建的工程系统。
 
-当前项目已经有了最重要的底座：安全沙箱、补丁审批和基础数据库存储。后续最应该优先补的是工程化质量门禁、多 provider、上下文压缩、真实 memory、MCP/Skills/Hooks、MySQL 数据层扩展、Milvus 数据层、Web 审批和多 agent worktree 隔离。
+当前项目已经有了最重要的底座：安全沙箱、补丁审批、基础数据库存储和真实代码语义索引。后续最应该优先补的是工程化质量门禁、多 provider、真实 memory、MCP/Skills/Hooks、Milvus memory 数据层、Redis 分布式协调、Web 审批生产化和多 agent worktree 隔离。
 
 如果用于秋招面试，建议把项目主线讲成：
 

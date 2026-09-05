@@ -20,6 +20,8 @@ from coding_agent.sandbox.contracts import SandboxLimits
 from coding_agent.sandbox.docker import DockerSandboxExecutor
 from coding_agent.sandbox.patches import MySqlPatchStore, PatchRegistry
 from coding_agent.sandbox.snapshot import SnapshotService
+from coding_agent.semantic.contracts import SemanticIndexError
+from coding_agent.semantic.service import create_semantic_service
 from coding_agent.sessions.factory import create_session_store
 from coding_agent.sessions.mysql import MySqlSessionStore
 from coding_agent.sessions.store import (
@@ -36,6 +38,7 @@ from coding_agent.tools.builtin import (
 from coding_agent.tools.contracts import Tool, ToolContext
 from coding_agent.tools.plan import SubmitPlanTool
 from coding_agent.tools.sandbox import ApplyPatchTool, SandboxCommandTool
+from coding_agent.tools.semantic import SemanticSearchTool
 from coding_agent.tracing.store import (
     ApplicationLog,
     JsonlArtifactStore,
@@ -409,6 +412,11 @@ class CodingAgent:
             ApplyPatchTool(patches),
             GitDiffTool(),
         ]
+        if self.config.semantic_backend == "milvus":
+            try:
+                tools.append(SemanticSearchTool(create_semantic_service(self.config)))
+            except SemanticIndexError:
+                pass
         if self.config.plan_mode:
             tools.append(SubmitPlanTool())
         return AgentRuntime(
