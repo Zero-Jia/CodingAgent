@@ -12,11 +12,21 @@ from coding_agent.agent.coding_agent import ChatSession, CodingAgent
 from coding_agent.ai.gateway import ModelProviderError, create_model_adapter
 from coding_agent.config import AgentConfig
 from coding_agent.db import check_database_url, database_health_text
+from coding_agent.memory import (
+    MemoryExtractor,
+    ModelExtractor,
+    NoopMemoryStore,
+    persist_candidates,
+)
 from coding_agent.runtime.events import AgentEvent
 from coding_agent.runtime.loop import ApprovalProvider
 from coding_agent.semantic.contracts import SemanticIndexError
 from coding_agent.semantic.service import create_semantic_service
-from coding_agent.sessions.factory import StorageConfigError, create_session_store
+from coding_agent.sessions.factory import (
+    StorageConfigError,
+    create_memory_store,
+    create_session_store,
+)
 from coding_agent.sessions.lock import SessionLockedError, acquire_session_lock
 from coding_agent.sessions.store import SessionEvent, SessionStore
 
@@ -203,6 +213,110 @@ def semantic_search_command(
     except SemanticIndexError as error:
         raise typer.BadParameter(str(error), param_hint="semantic config") from error
     typer.echo(service.format_hits(hits))
+
+
+@app.command("extract-memories")
+def extract_memories(
+    session_id: str,
+    workspace: Annotated[Path, typer.Option("--workspace", exists=True, file_okay=False)] = Path(
+        "."
+    ),
+    no_model: Annotated[
+        bool,
+        typer.Option(
+            "--no-model",
+            help="Only run the deterministic rule extractor; skip the model extractor.",
+        ),
+    ] = False,
+    provider: Annotated[str | None, typer.Option("--provider")] = None,
+    model: Annotated[str | None, typer.Option("--model")] = None,
+    storage_backend: Annotated[
+        str | None, typer.Option("--storage", help="Session storage backend: jsonl or mysql.")
+    ] = None,
+    database_url: Annotated[
+        str | None, typer.Option("--database-url", help="SQLAlchemy database URL for memories.")
+    ] = None,
+    database_create_schema: Annotated[
+        bool,
+        typer.Option(
+            "--database-create-schema",
+            help="Create database tables at startup for local development and tests.",
+        ),
+    ] = False,
+) -> None:
+    """从已持久化的 session 对话中提取候选记忆并写入 memory store。"""
+    overrides: dict[str, object] = {}
+    if provider is not None:
+        overrides["model_provider"] = provider
+    if model is not None:
+        overrides["model"] = model
+    if storage_backend is not None:
+        overrides["storage_backend"] = storage_backend
+    if database_url is not None:
+        overrides["database_url"] = database_url
+    if database_create_schema:
+        overrides["database_create_schema"] = True
+    config = AgentConfig.from_environment(workspace, **overrides)
+    data_root = config.workspace / ".coding-agent"
+
+    try:
+        sessions = create_session_store(config, data_root)
+    except StorageConfigError as error:
+        raise typer.BadParameter(str(error), param_hint="--database-url") from error
+
+    checkpoint = asyncio.run(sessions.load_checkpoint(session_id))
+    if checkpoint is None:
+        typer.echo(f"未找到 session {session_id} 的 checkpoint，无法提取记忆。", err=True)
+        raise typer.Exit(code=1)
+
+    model_extractor = None
+    if not no_model:
+        try:
+            adapter = create_model_adapter(config)
+            model_extractor = ModelExtractor(adapter)
+        except ModelProviderError:
+            typer.echo(
+                "提示：模型未配置，仅运行规则提取（使用 --no-model 可消除此提示）。",
+                err=True,
+            )
+
+    extractor = MemoryExtractor(model=model_extractor)
+    candidates = asyncio.run(
+        extractor.extract(
+            checkpoint.messages,
+            session_id=session_id,
+            run_id="",
+            user_id="",
+            project_id=str(config.workspace.resolve()),
+        )
+    )
+
+    try:
+        memory_store = create_memory_store(config, data_root)
+    except StorageConfigError as error:
+        raise typer.BadParameter(str(error), param_hint="--database-url") from error
+
+    if isinstance(memory_store, NoopMemoryStore):
+        typer.echo(
+            "存储后端为 jsonl，记忆持久化需要 mysql（--database-url）；本次仅输出候选预览："
+        )
+        for record in candidates:
+            typer.echo(
+                f"- [{record.category}] conf={record.confidence:.2f} {record.content}"
+            )
+        typer.echo(f"候选总数：{len(candidates)}（未持久化）")
+        return
+
+    new, skipped = asyncio.run(persist_candidates(memory_store, candidates))
+    typer.echo(
+        "\n".join(
+            [
+                f"提取候选：{len(candidates)}",
+                f"新增：{new}",
+                f"跳过（已存在）：{skipped}",
+            ]
+        )
+    )
 
 
 @app.command()

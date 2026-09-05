@@ -20,6 +20,41 @@
 
 ---
 
+### Session 2026-09-05（Memory extraction 混合式提取）
+
+- **目标**：完成 B1-3，实现"规则优先、模型补位"的候选记忆提取，从 session checkpoint 对话提取候选记忆写入 `MemoryStore`，不实现 Milvus 向量召回（B1-2）、审核 CLI（B1-4）、recall 注入（B1-5）
+- **完成任务**：
+  - [B1-3] Memory extraction — 改动文件：
+    - `src/coding_agent/memory/extraction.py`：`RuleExtractor`（user 消息线索词中英匹配，confidence=0.8，category=preference，返回候选+命中下标集合）；`ModelExtractor`（规则未命中部分=非线索 user + assistant 消息，跳过 system/tool，喂 `ModelAdapter` + 提取 prompt，解析 JSON，confidence 默认 0.5，容错 markdown fence/非法 JSON/ModelError 跳过不崩）；`MemoryExtractor` 编排（规则→模型→按 memory_id 去重合并，规则版高置信优先）；`persist_candidates`（`store.get()` 幂等去重，返回 new/skipped）；`MemoryCategory` 常量（preference/convention/decision/fix/fact）
+    - `src/coding_agent/memory/contracts.py`：新增 `MemoryCategory` 受控词表
+    - `src/coding_agent/memory/__init__.py`：导出 `MemoryExtractor`/`ModelExtractor`/`RuleExtractor`/`persist_candidates`/`MemoryCategory`
+    - `src/coding_agent/sessions/factory.py`：`create_memory_store(config, data_root)`（jsonl→NoopMemoryStore，mysql→MySqlMemoryStore，镜像 `create_session_store` 范式）
+    - `src/coding_agent/cli/app.py`：`extract-memories --session-id --workspace [--no-model] [--provider/--model/--storage/--database-url/--database-create-schema]`；mysql 持久化打印计数，jsonl 打印候选预览
+    - `tests/test_memory_extraction.py`：22 个测试（规则命中/不命中/确定性/归一化/非 user 跳过；模型 JSON 解析/空数组/非法 JSON/markdown fence/ModelError 跳过/confidence 越界/未知类别/空 transcript；编排合并去重/--no-model/跨 run 确定性；persist 幂等/Noop 不崩/端到端；factory jsonl+mysql；CLI 冒烟 sqlite+checkpoint）
+- **关键决策**：
+  - **混合式而非纯规则**：规则只抓显式线索词（最强信号），模型在规则未命中部分自主判断（项目约定/历史修复/重要决策等隐含信号），契合 Agentic RAG 思路；两段都产 `status=candidate`，统一由 B1-4 人工审核把关，模型低置信候选不会直接污染 recall
+  - **memory_id = sha256(content)[:32]**（content-only），使相同内容跨 session 自动合并；已知限制：`source_session_id` FK(ondelete CASCADE) 若源 session 行被显式删除会级联删记忆，留待 B1-6 收紧（可让 source_session_id 可空或解耦 FK）
+  - **模型输入只含规则未命中部分**（非线索 user + assistant，跳过 system/tool），避免重复提取与 tool 大输出噪声，省 token
+  - **置信度分层**：规则 0.8 / 模型默认 0.5，便于 B1-4 审核优先级与 B1-6 衰减
+  - **`persist_candidates` 用 `store.get()` 去重**而非 try/except IntegrityError，可移植且不依赖 dialect 特定 upsert
+  - **CLI 对 NoopMemoryStore 分支**：jsonl 后端打印候选预览而非调用 persist（Noop 的 get 返回 None 会误计 new）
+- **遇到的问题**：
+  - 初版 CLI 冒烟测试用 `JsonlSessionStore` 存 checkpoint，但 CLI 用 `--storage mysql` 建了另一个 store 读不到；改用 `MySqlSessionStore` 在 sqlite 上存 checkpoint（`save_checkpoint` 内部 `_ensure_session` 自动建 sessions 行，满足 FK）
+  - `NoopMemoryStore` 在 `persist_candidates` 中 `get` 返回 None → 误计 new=1；这不是 bug（CLI 已对 Noop 分支），修测试断言为 new=1/skipped=0 并注释说明
+  - ruff UP038 要求 `isinstance(x, (int,float))` → `isinstance(x, int | float)`；F402 警告 `event` 循环变量遮蔽 sqlalchemy `event` 导入，重命名为 `evt`
+- **验证结果**：
+  - ruff check：All checks passed
+  - mypy（全量）：Success, 60 source files
+  - pytest：173 passed, 1 skipped（基线 151/1 → +22 新增 extraction 测试；语义真实集成 smoke test 仍 skipped）
+- **未完成/遗留**：
+  - 未接入 runtime：提取是离线 CLI 命令，`MemoryExtractor` 未被 `runtime/` 引用；B1-5 recall 注入时再装配
+  - 未实现审核 CLI（B1-4）：候选写入后无人工 promote/reject 入口
+  - 未实现 Milvus memory collection（B1-2）：recall 仍只能基于 metadata search（SQL LIKE）
+  - 模型提取的真实 DeepSeek smoke test 未写（仅 FakeModelAdapter 覆盖）；按语义索引惯例后续可加 `RUN_REAL_EXTRACTION_TESTS=1` 门控测试
+- **下一步建议**：B1-4（人工审核 promotion 流程，CLI 审核命令）——本轮已产出大量 candidate，需要审核入口才能 promote 供 recall 使用；或 B1-2（Milvus memory collection）让 recall 支持语义召回。建议先做 B1-4（无外部依赖，闭合"提取→审核→promoted"链路）
+
+---
+
 ### Session 2026-09-05（Memory metadata schema + Alembic migration）
 
 - **目标**：完成 B1-1，为 Memory 系统打地基。只实现 MySQL/SQLite metadata 层，不实现 Milvus 向量召回、自动 extraction 与 recall 注入

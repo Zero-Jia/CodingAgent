@@ -11,19 +11,20 @@
 - **当前阶段：Phase B 高辨识度能力**，Memory 系统进行中
 - 安全内核完整：Docker 无网络沙箱 + 快照过滤 + patch-only 写回 + 审批流 + 命令风险检测
 - **B1-1 已完成**：`memories` 表 + Alembic migration 0004 + `MemoryStore` Protocol（store/get/list_by_status/update_status/list_promoted/search）+ `MySqlMemoryStore` + `NoopMemoryStore` + 15 个契约测试。MemoryStore 尚未接入 runtime
-- 测试基线：151 passed，1 skipped；ruff + mypy strict 全通过（59 source files）
+- **B1-3 已完成**：混合式候选记忆提取（`RuleExtractor` 线索词匹配 + `ModelExtractor` 模型自主判断规则未命中部分）+ `MemoryExtractor` 编排去重 + `persist_candidates` 幂等去重 + `create_memory_store` 工厂 + CLI `extract-memories --no-model`。22 个测试。提取是离线 CLI，未接入 runtime；候选写入后无审核入口
+- 测试基线：173 passed，1 skipped；ruff + mypy strict 全通过（60 source files）
 
 ## 下一步优先做什么
 
-**Phase B1：Memory 系统**（B1-1 已完成，继续 B1-2 ~ B1-6）
+**Phase B1：Memory 系统**（B1-1、B1-3 已完成，继续 B1-2 / B1-4 ~ B1-6）
 
 推荐推进顺序：
 1. ~~B1-1：MySQL memory metadata schema + Alembic migration~~ ✅ done
-2. **B1-3：Memory extraction**（推荐先做，无外部依赖，基于 B1-1 的 `MySqlMemoryStore` 从 session events 提取候选记忆写入，能跑通端到端候选写入；与用户 RAG 背景契合）
-3. **B1-2：Milvus memory vector collection**（复用 `semantic/milvus.py` 模式新增 memory collection）
-4. **B1-4**：人工审核 promotion 流程（候选 → promoted，CLI 审核命令）
-5. **B1-5**：Memory recall 注入 runtime context（任务开始召回高置信记忆注入系统上下文）
-6. **B1-6**：记忆过期与置信度管理（TTL、置信度衰减、去重合并）
+2. ~~B1-3：Memory extraction（混合式提取）~~ ✅ done
+3. **B1-4：人工审核 promotion 流程**（推荐先做，无外部依赖，闭合"提取→审核→promoted"链路；本轮已产出大量 candidate，需要审核入口才能 promote 供 recall 使用）
+4. **B1-2：Milvus memory vector collection**（复用 `semantic/milvus.py` 模式新增 memory collection，让 recall 支持语义召回）
+5. **B1-5**：Memory recall 注入 runtime context（任务开始召回高置信 promoted 记忆注入系统上下文）
+6. **B1-6**：记忆过期与置信度管理（TTL、置信度衰减、去重合并；收紧 B1-3 的 `source_session_id` FK CASCADE 限制）
 
 每个任务应在 1-2 个 session 内完成，必须包含测试、文档更新和验证记录。
 

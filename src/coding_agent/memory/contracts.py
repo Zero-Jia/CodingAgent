@@ -39,6 +39,22 @@ class MemoryScope:
     ALL: tuple[str, ...] = (SESSION, PROJECT, USER)
 
 
+class MemoryCategory:
+    """记忆类别受控词表。
+
+    规则提取器只产出 ``preference``；模型提取器可产出任意类别。受控词表
+    便于 B1-4 审核分组与 B1-6 去重合并。
+    """
+
+    PREFERENCE = "preference"
+    CONVENTION = "convention"
+    DECISION = "decision"
+    FIX = "fix"
+    FACT = "fact"
+
+    ALL: tuple[str, ...] = (PREFERENCE, CONVENTION, DECISION, FIX, FACT)
+
+
 class MemoryRecord(BaseModel):
     """单条记忆的 metadata 表示。"""
 
@@ -174,6 +190,7 @@ class NoopMemoryStore:
 
 
 __all__ = [
+    "MemoryCategory",
     "MemoryRecord",
     "MemoryScope",
     "MemoryStatus",

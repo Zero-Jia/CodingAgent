@@ -8,6 +8,8 @@ from sqlalchemy.engine import make_url
 
 from coding_agent.config import AgentConfig
 from coding_agent.db import create_database_engine, initialize_database
+from coding_agent.memory.contracts import MemoryStore, NoopMemoryStore
+from coding_agent.memory.mysql import MySqlMemoryStore
 from coding_agent.sessions.mysql import MySqlSessionStore
 from coding_agent.sessions.store import JsonlSessionStore, SessionStore
 
@@ -76,3 +78,47 @@ def _database_password(database_url: str) -> str:
         return make_url(database_url).password or ""
     except Exception:
         return ""
+
+
+def create_memory_store(config: AgentConfig, data_root: Path) -> MemoryStore:
+    """Create the configured memory metadata store.
+
+    JSONL backend (the local default) returns a ``NoopMemoryStore`` because the
+    memory metadata schema (B1-1) is MySQL-only; callers should treat that as
+    "persistence unavailable" and surface a preview instead of persisting.
+    MySQL backend builds a short-lived engine for offline batch extraction.
+    """
+    if config.storage_backend == "jsonl":
+        return NoopMemoryStore()
+    if config.storage_backend != "mysql":
+        raise StorageConfigError(
+            f"unsupported storage backend: {config.storage_backend}"
+        )
+    if config.database_url is None:
+        raise StorageConfigError(
+            "storage backend 'mysql' requires CODING_AGENT_DATABASE_URL or --database-url"
+        )
+
+    raw_url = config.database_url.get_secret_value()
+    redacted_url = redact_database_url(raw_url)
+    try:
+        engine = create_database_engine(
+            raw_url,
+            pool_size=config.database_pool_size,
+            max_overflow=config.database_max_overflow,
+            pool_pre_ping=config.database_pool_pre_ping,
+            connect_timeout_seconds=config.database_connect_timeout_seconds,
+            pool_recycle_seconds=config.database_pool_recycle_seconds,
+        )
+        if config.database_create_schema:
+            initialize_database(engine)
+    except Exception as error:
+        message = str(error).replace(raw_url, redacted_url)
+        password = _database_password(raw_url)
+        if password:
+            message = message.replace(password, "***")
+        raise StorageConfigError(
+            f"failed to configure mysql memory store for {redacted_url}: {message}"
+        ) from error
+    return MySqlMemoryStore(engine)
+
