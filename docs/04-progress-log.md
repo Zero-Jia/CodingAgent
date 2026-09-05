@@ -49,7 +49,7 @@
 
 ---
 
-### Session 2026-09-05（Memory 人工审核 promotion 流程）
+### Session 2026-09-05（Memory 审核流程 + Milvus 向量索引）—— B1-4
 
 - **目标**：完成 B1-4，为 B1-3 产出的候选记忆提供人工审核入口（promote 为 promoted / reject 为 rejected），闭合"提取→审核→promoted"链路。不实现 Milvus 向量召回（B1-2）、recall 注入（B1-5）、过期管理（B1-6）
 - **完成任务**：
