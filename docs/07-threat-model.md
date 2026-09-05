@@ -81,7 +81,6 @@
 
 剩余风险：
 
-- Pending patch 当前只存在于单个 runtime 内存中，没有持久化审批队列。
 - 当前不支持二进制文件、重命名和复杂文件模式变更，需要人工处理。
 
 ### Shell 执行风险
@@ -139,11 +138,11 @@
 - `apply_patch` 审批详情包含 changed files 和脱敏 diff preview。
 - session、trace、artifact、transcript 和 application log 会保存在 `.coding-agent/`。
 - 完整工具输出写入脱敏 artifact，trace 中保留摘要、字符数和 hash。
+- 配置 MySQL 后，approval queue 和 pending patch package 持久化到数据库。
 
 剩余风险：
 
-- 当前审批在 CLI 中完成，没有 Web 审批页、多级审批或 reviewer comment。
-- 审计数据当前是本地 JSONL，不是集中式不可篡改审计日志。
+- 当前审批审计是本地 JSONL + MySQL 表，不是集中式不可篡改审计日志。
 - 脱敏不应被视为合规级秘密发现系统。
 
 ## 未实现的安全能力
@@ -152,9 +151,8 @@
 
 - GitHub Actions 以外的完整 CI/CD 质量门禁。
 - RBAC、组织级 policy 和多租户隔离。
-- MySQL 审计存储。
+- 完整数据库 audit log schema。
 - 远程沙箱执行器。
 - Docker 镜像 digest pinning、SBOM 和漏洞扫描。
-- Web patch 审批界面。
 - MCP、Skills、Hooks 的权限和审计集成。
 - 长期 memory 的人工审核和 recall 注入。

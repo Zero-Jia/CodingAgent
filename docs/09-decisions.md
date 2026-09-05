@@ -111,3 +111,21 @@ MewCode 已经实现了 TUI、MCP、Skills、Hooks、memory、sub-agent、teams�
 - 优先做 model gateway、context manager、mock LLM tests 和 CI。
 - MCP、Skills、Hooks、memory、多 agent 应在核心 runtime 测试更充分后再加入。
 - 不能用直接本地写文件工具替代 sandbox-patch 链路。
+
+## 决策 7：秋招阶段优先做高辨识度能力
+
+状态：已接受（2026-09-05）。
+
+背景：
+
+秋招时间窗口有限，需要在面试中展示项目的技术深度和差异化。
+
+决策：
+
+优先做 Phase B（Memory / MCP / 多 Agent），工程化（coverage、pre-commit）和生产化（RBAC、OTel）后续补齐。
+
+影响：
+
+- Memory 系统复用现有 Milvus + MySQL 基础设施，边际成本最低，优先做。
+- 安全内核已经足够扎实，是项目的"基本盘"，不需要再花大量时间加固。
+- 工程化是"锦上添花"，不影响核心叙事。
