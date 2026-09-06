@@ -11,7 +11,7 @@ import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Engine, and_, func, select, update
+from sqlalchemy import ColumnElement, Engine, and_, func, or_, select, update
 
 from coding_agent.db import tables
 from coding_agent.memory.contracts import MemoryRecord
@@ -162,6 +162,7 @@ class MySqlMemoryStore:
             tables.memories.c.user_id == user_id,
             tables.memories.c.project_id == project_id,
             tables.memories.c.status == "promoted",
+            _not_expired_clause(),
         ]
         if scope is not None:
             clauses.append(tables.memories.c.scope == scope)
@@ -186,6 +187,7 @@ class MySqlMemoryStore:
             tables.memories.c.user_id == user_id,
             tables.memories.c.project_id == project_id,
             func.lower(tables.memories.c.content).like(f"%{query.lower()}%"),
+            _not_expired_clause(),
         ]
         if status is not None:
             clauses.append(tables.memories.c.status == status)
@@ -197,6 +199,19 @@ class MySqlMemoryStore:
         with self.engine.connect() as connection:
             rows = connection.execute(statement).mappings().all()
         return [_record_from_row(row) for row in rows]
+
+
+def _not_expired_clause() -> ColumnElement[bool]:
+    """B1-6：软过期过滤——expires_at 为空或晚于当前 UTC 时间的记录才可见。
+
+    供 ``list_promoted`` 与 ``search`` 使用；``list_by_status`` 不过滤
+    （审核界面需要看到全部状态）。
+    """
+    now = datetime.now(UTC)
+    return or_(
+        tables.memories.c.expires_at.is_(None),
+        tables.memories.c.expires_at > now,
+    )
 
 
 def _record_values(record: MemoryRecord) -> dict[str, object]:
@@ -229,7 +244,7 @@ def _record_from_row(row: Any) -> MemoryRecord:
         scope=str(row["scope"]),
         category=str(row["category"]),
         content=str(row["content"]),
-        source_session_id=str(row["source_session_id"]),
+        source_session_id=str(row["source_session_id"] or ""),
         source_run_id=str(row["source_run_id"] or ""),
         confidence=float(row["confidence"]),
         status=str(row["status"]),

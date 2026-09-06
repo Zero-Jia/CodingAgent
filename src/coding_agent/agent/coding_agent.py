@@ -11,6 +11,14 @@ from pathlib import Path
 
 from coding_agent.ai.contracts import ChatMessage, ModelAdapter, Usage
 from coding_agent.config import AgentConfig
+from coding_agent.memory.contracts import MemoryStore, MemoryVectorIndex, NoopMemoryStore
+from coding_agent.memory.mysql import MySqlMemoryStore
+from coding_agent.memory.recall import (
+    MemoryRecallService,
+    apply_memory_section,
+    format_recall_block,
+)
+from coding_agent.memory.vector import MilvusMemoryVectorIndex
 from coding_agent.policy.engine import PolicyEngine
 from coding_agent.runtime.context import ContextBudget, ContextManager
 from coding_agent.runtime.events import AgentEvent, ContextCompacted, TokenUsageUpdated
@@ -20,7 +28,8 @@ from coding_agent.sandbox.contracts import SandboxLimits
 from coding_agent.sandbox.docker import DockerSandboxExecutor
 from coding_agent.sandbox.patches import MySqlPatchStore, PatchRegistry
 from coding_agent.sandbox.snapshot import SnapshotService
-from coding_agent.semantic.contracts import SemanticIndexError
+from coding_agent.semantic.contracts import EmbeddingProvider, SemanticIndexError
+from coding_agent.semantic.embeddings import DashScopeEmbeddingProvider
 from coding_agent.semantic.service import create_semantic_service
 from coding_agent.sessions.factory import create_session_store
 from coding_agent.sessions.mysql import MySqlSessionStore
@@ -162,6 +171,7 @@ class ChatSession:
             tool_records: list[str] = []
             self.summary.run_count += 1
             self.summary.last_user_message_preview = _preview(message)
+            await self._apply_memory_recall(message)
             compacted = self._agent._context_manager().prepare(self.messages)
             if compacted.compacted:
                 self.messages = compacted.messages
@@ -290,6 +300,25 @@ class ChatSession:
         await self._agent._save_checkpoint(self)
         await self._agent.sessions.save_summary(self.summary)
 
+    async def _apply_memory_recall(self, user_message: str) -> None:
+        """B1-5：按本轮 user message 召回记忆并刷新 system message 尾部记忆段。
+
+        召回失败或无命中时剥离旧记忆段；注入永不抛出（service 内部已降级）。
+        """
+        service = self._agent.memory_recall
+        if service is None or not self.messages or self.messages[0].role != "system":
+            return
+        config = self._agent.config
+        records = await service.recall(
+            user_message,
+            user_id=config.memory_user_id,
+            project_id=config.memory_project_id or str(config.workspace.resolve()),
+        )
+        block = format_recall_block(records, max_chars=config.memory_recall_max_chars)
+        content = apply_memory_section(self.messages[0].content, block)
+        if content != self.messages[0].content:
+            self.messages[0] = ChatMessage(role="system", content=content)
+
 
 class CodingAgent:
     """适用于 CLI、FastAPI、TUI 和 Worker 的稳定 Python API。"""
@@ -308,6 +337,7 @@ class CodingAgent:
         self.sessions = sessions or create_session_store(config, self.data_root)
         self.application_log = ApplicationLog(self.data_root)
         self.artifacts = JsonlArtifactStore(self.data_root)
+        self.memory_recall = _create_memory_recall(config, self.sessions)
 
     async def repository_context(self) -> RepositoryContext:
         return await WorkspaceService(self.config.workspace).inspect()
@@ -491,6 +521,51 @@ class CodingAgent:
             f"git_status={context.git_status[:2000]}\nverification_candidates={context.verification_commands}\n"
             f"rules={rules[:8000]}"
         )
+
+
+def _create_memory_recall(
+    config: AgentConfig, sessions: SessionStore
+) -> MemoryRecallService | None:
+    """装配 B1-5 记忆召回服务。
+
+    - 未启用 → None（行为与旧版本完全一致）
+    - jsonl 后端 → NoopMemoryStore（召回恒为空，静默降级）
+    - mysql 后端 → 复用 session store 的 engine，避免重复建连接池
+    - semantic_backend=milvus 且配置了 DashScope key → 启用向量语义通道
+    """
+    if not config.memory_recall_enabled:
+        return None
+    store: MemoryStore = (
+        MySqlMemoryStore(sessions.engine)
+        if isinstance(sessions, MySqlSessionStore)
+        else NoopMemoryStore()
+    )
+    vector_index: MemoryVectorIndex | None = None
+    embedder: EmbeddingProvider | None = None
+    if config.semantic_backend == "milvus" and config.dashscope_api_key is not None:
+        token = config.milvus_token.get_secret_value() if config.milvus_token is not None else ""
+        vector_index = MilvusMemoryVectorIndex(
+            uri=config.milvus_uri,
+            token=token,
+            database=config.milvus_database,
+            collection_name=config.milvus_memory_collection,
+        )
+        embedder = DashScopeEmbeddingProvider(
+            api_key=config.dashscope_api_key.get_secret_value(),
+            base_url=config.dashscope_base_url,
+            model=config.dashscope_embedding_model,
+            dimension=config.dashscope_embedding_dimensions,
+            batch_size=config.dashscope_embedding_batch_size,
+        )
+    return MemoryRecallService(
+        store=store,
+        vector_index=vector_index,
+        embedder=embedder,
+        top_k=config.memory_recall_top_k,
+        min_confidence=config.memory_recall_min_confidence,
+        min_score=config.memory_recall_min_score,
+        decay_half_life_days=config.memory_decay_half_life_days,
+    )
 
 
 def _preview(message: str) -> str:

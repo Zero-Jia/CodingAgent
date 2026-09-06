@@ -4,29 +4,41 @@
 
 ---
 
-## 当前项目状态（最后更新：2026-09-05）
+## 当前项目状态（最后更新：2026-09-06）
 
 - 项目已完成安全优先 Coding Agent MVP（安全内核 + Runtime + MySQL 存储 + Milvus 语义索引）
 - 文档体系已重构为编号格式（`/docs/00-*.md` ~ `09-*.md`）
 - **当前阶段：Phase B 高辨识度能力**，Memory 系统进行中
 - 安全内核完整：Docker 无网络沙箱 + 快照过滤 + patch-only 写回 + 审批流 + 命令风险检测
-- **B1-1 已完成**：`memories` 表 + Alembic migration 0004 + `MemoryStore` Protocol（store/get/list_by_status/update_status/list_promoted/search）+ `MySqlMemoryStore` + `NoopMemoryStore` + 15 个契约测试。MemoryStore 尚未接入 runtime
-- **B1-2 已完成**：`MemoryVectorIndex` Protocol（ensure_collection/upsert/search）+ `MemoryVectorHit` + `MilvusMemoryVectorIndex`（独立 collection，schema: memory_id/user_id/project_id/scope/category/content/embedding，COSINE，按 user+project 过滤）+ `InMemoryMemoryVectorIndex`；config 新增 `milvus_memory_collection`。8 个测试。向量召回能力就绪，待 B1-5 消费
-- **B1-3 已完成**：混合式候选记忆提取（`RuleExtractor` 线索词匹配 + `ModelExtractor` 模型自主判断规则未命中部分）+ `MemoryExtractor` 编排去重 + `persist_candidates` 幂等去重 + `create_memory_store` 工厂 + CLI `extract-memories --no-model`。22 个测试。提取是离线 CLI，未接入 runtime
-- **B1-4 已完成**：`MemoryReviewService`（`list_candidates`/`promote`/`reject`/`review`）+ `ReviewError` + CLI `review-memories --reviewer` 逐条交互审核。审核只允许 `candidate -> promoted/rejected`，校验记忆存在/状态为 candidate/reviewer 非空。9 个测试。闭合"提取→审核→promoted"链路
-- 测试基线：190 passed，1 skipped；ruff + mypy strict 全通过（62 source files）
+- **B1-1 已完成**：`memories` 表 + Alembic migration 0004 + `MemoryStore` Protocol（store/get/list_by_status/update_status/list_promoted/search）+ `MySqlMemoryStore` + `NoopMemoryStore` + 15 个契约测试
+- **B1-2 已完成**：`MemoryVectorIndex` Protocol + `MilvusMemoryVectorIndex`（独立 collection，COSINE，按 user+project 过滤）+ `InMemoryMemoryVectorIndex`；config `milvus_memory_collection`（B1-5 修复了该字段未声明、pydantic 静默丢弃的 bug）
+- **B1-3 已完成**：混合式候选记忆提取（Rule + Model）+ `persist_candidates` 幂等 + CLI `extract-memories --no-model`。22 个测试
+- **B1-4 已完成**：`MemoryReviewService` + CLI `review-memories --reviewer`。闭合"提取→审核→promoted"链路
+- **B1-5 已完成**：`MemoryRecallService` 双通道召回（向量优先 + metadata 保底，异常降级不阻断回合）+ `format_recall_block`/`apply_memory_section`/`strip_memory_section` 幂等注入；`CodingAgent` 装配（默认关闭，jsonl→Noop，mysql 复用 session engine）；`ChatSession.send()` 每回合按 query 召回并替换式注入 `messages[0]` 尾部记忆段。23 个测试
+- **B1-2b 已完成**：`MemorySyncService`（`list_promoted` → 分批 embed → `index.upsert` 幂等同步）+ CLI `agent sync-memories`。10 个测试。至此 Memory 端到端链路（提取→审核→向量同步→召回注入）完全闭合
+- **B1-6 已完成**：TTL（extractor 写 `expires_at`，mysql `list_promoted`/`search` 软过滤）+ 置信度半衰期衰减（`effective_confidence`，recall 过滤/打分用，不改存储值）+ memory_id 归一化（空白折叠 + 小写后哈希，去重）+ `source_session_id` FK 放松为 nullable + SET NULL（migration 0005：SQLite batch 重建 / MySQL ALTER；删除 session 后记忆保留，来源读取为 ""）。config 新增 `memory_ttl_days`/`memory_decay_half_life_days` + env
+- 测试基线：239 passed，1 skipped；ruff + mypy strict 全通过（64 source files）
+- **Phase B1 Memory 系统全部完成**
 
 ## 下一步优先做什么
 
-**Phase B1：Memory 系统**（B1-1、B1-2、B1-3、B1-4 已完成，继续 B1-5 / B1-6）
+**Phase B2：MCP 集成**（B1-1 ~ B1-6 + B1-2b 全部完成）
 
 推荐推进顺序：
 1. ~~B1-1：MySQL memory metadata schema + Alembic migration~~ ✅ done
 2. ~~B1-2：Milvus memory vector collection~~ ✅ done
-3. ~~B1-3：Memory extraction（混合式提取）~~ ✅ done
-4. ~~B1-4：人工审核 promotion 流程~~ ✅ done
-5. **B1-5：Memory recall 注入 runtime context**（推荐先做，闭合 Memory 端到端链路：任务开始时根据 query 召回高置信 promoted 记忆，语义召回走 B1-2 `MemoryVectorIndex.search`，metadata 保底走 `MemoryStore.search`，注入系统上下文）
-6. **B1-6**：记忆过期与置信度管理（TTL、置信度衰减、去重合并；收紧 B1-3 的 `source_session_id` FK CASCADE 限制）
+3. ~~B1-2b：promoted 记忆向量索引同步 CLI~~ ✅ done（向量链路已闭合）
+4. ~~B1-3：Memory extraction（混合式提取）~~ ✅ done
+5. ~~B1-4：人工审核 promotion 流程~~ ✅ done
+6. ~~B1-5：Memory recall 注入 runtime context~~ ✅ done
+7. ~~B1-6：记忆过期与置信度管理~~ ✅ done
+8. **B2-1**：MCP server 配置与连接管理器（配置 MCP server 列表，管理 stdio / HTTP 连接生命周期）
+
+Memory 已知限制（后续按需改进，不阻塞 B2）：
+- 过期记忆只有软过滤，没有物理 GC；向量索引中过期/拒绝记忆也不会被 sync 清理（reject 过的记忆若曾同步会残留索引，但 recall 回查 `store.get` 校验，正确性不受影响）
+- metadata 保底通道用整条 query 子串匹配（B1-1 契约），自然语言 query 召回弱；语义通道才是主力
+- `memory_recall_enabled` 默认 False；使用需设置 `CODING_AGENT_MEMORY_RECALL=1`（+ 可选 `CODING_AGENT_MEMORY_USER_ID`/`CODING_AGENT_MEMORY_PROJECT_ID`，后者缺省 fallback 到 workspace 绝对路径）
+- 使用流程：`extract-memories` → `review-memories` 人工 promote → `sync-memories` 写入向量索引 → 会话内自动召回（需开启 `memory_recall_enabled` 且后端为 mysql+milvus）
 
 每个任务应在 1-2 个 session 内完成，必须包含测试、文档更新和验证记录。
 

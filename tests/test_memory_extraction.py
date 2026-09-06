@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +36,7 @@ from coding_agent.memory.extraction import (
     MemoryExtractor,
     ModelExtractor,
     RuleExtractor,
+    _memory_id,
     persist_candidates,
 )
 from coding_agent.memory.mysql import MySqlMemoryStore
@@ -555,3 +556,40 @@ def test_cli_extract_memories_persists_via_sqlite(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "新增：1" in result.output
+
+
+# --------------------------------------------------------------------------- #
+# B1-6：TTL 与归一化去重
+# --------------------------------------------------------------------------- #
+
+
+def test_memory_id_normalizes_case_and_whitespace() -> None:
+    assert _memory_id("Always  run RUFF ") == _memory_id("always run ruff")
+    assert _memory_id("always run ruff") != _memory_id("always run mypy")
+
+
+def test_memory_extractor_writes_expires_at_from_ttl() -> None:
+    fixed_now = datetime(2026, 9, 6, 12, 0, 0, tzinfo=UTC)
+    extractor = MemoryExtractor(
+        ttl_days=7,
+        clock=lambda: fixed_now,
+        model=ModelExtractor(FakeModelAdapter([])),
+    )
+
+    records = asyncio.run(
+        extractor.extract([_user("请记住：所有提交前必须运行 ruff。")], **_meta_kwargs())
+    )
+
+    assert len(records) == 1
+    assert records[0].expires_at == fixed_now + timedelta(days=7)
+
+
+def test_memory_extractor_without_ttl_leaves_expires_at_none() -> None:
+    extractor = MemoryExtractor(model=ModelExtractor(FakeModelAdapter([])))
+
+    records = asyncio.run(
+        extractor.extract([_user("请记住：所有提交前必须运行 ruff。")], **_meta_kwargs())
+    )
+
+    assert len(records) == 1
+    assert records[0].expires_at is None

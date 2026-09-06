@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -396,3 +396,161 @@ def test_schema_compiles_for_mysql_with_inno_utf8mb4() -> None:
     )
     assert "ENGINE=InnoDB" in ddl
     assert "CHARSET=utf8mb4" in ddl
+
+
+# --------------------------------------------------------------------------- #
+# B1-6：TTL 软过期过滤与 FK 收紧
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_list_promoted_filters_expired(memory_store: MySqlMemoryStore) -> None:
+    now = datetime.now(UTC)
+    await memory_store.store(
+        _record("mem-expired", status=MemoryStatus.PROMOTED, expires_at=now - timedelta(days=1))
+    )
+    await memory_store.store(
+        _record("mem-active", status=MemoryStatus.PROMOTED, expires_at=now + timedelta(days=30))
+    )
+    await memory_store.store(_record("mem-no-expiry", status=MemoryStatus.PROMOTED))
+
+    records = await memory_store.list_promoted(user_id="user-1", project_id="proj-1")
+
+    assert {record.memory_id for record in records} == {"mem-active", "mem-no-expiry"}
+
+
+@pytest.mark.asyncio
+async def test_search_filters_expired(memory_store: MySqlMemoryStore) -> None:
+    now = datetime.now(UTC)
+    await memory_store.store(
+        _record(
+            "mem-expired",
+            content="ruff rule",
+            status=MemoryStatus.PROMOTED,
+            expires_at=now - timedelta(days=1),
+        )
+    )
+    await memory_store.store(
+        _record(
+            "mem-active",
+            content="ruff rule active",
+            status=MemoryStatus.PROMOTED,
+            expires_at=now + timedelta(days=30),
+        )
+    )
+
+    records = await memory_store.search(user_id="user-1", project_id="proj-1", query="ruff")
+
+    assert {record.memory_id for record in records} == {"mem-active"}
+
+
+@pytest.mark.asyncio
+async def test_list_by_status_keeps_expired_for_review(
+    memory_store: MySqlMemoryStore,
+) -> None:
+    """审核界面（list_by_status）不过滤过期记录，仍可看到全部状态。"""
+    now = datetime.now(UTC)
+    await memory_store.store(
+        _record("mem-expired", status=MemoryStatus.PROMOTED, expires_at=now - timedelta(days=1))
+    )
+
+    records = await memory_store.list_by_status(
+        user_id="user-1", project_id="proj-1", status=MemoryStatus.PROMOTED
+    )
+
+    assert [record.memory_id for record in records] == ["mem-expired"]
+
+
+@pytest.mark.asyncio
+async def test_deleting_session_keeps_memory(memory_store: MySqlMemoryStore) -> None:
+    """B1-6：session 删除不再级联删除记忆（FK SET NULL），source 变为空串。"""
+    await memory_store.store(
+        _record("mem-1", source_session_id="session-1", status=MemoryStatus.PROMOTED)
+    )
+
+    with memory_store.engine.begin() as connection:
+        connection.execute(
+            tables.sessions.delete().where(
+                tables.sessions.c.session_id == "session-1"
+            )
+        )
+
+    fetched = await memory_store.get("mem-1")
+    assert fetched is not None
+    assert fetched.source_session_id == ""
+
+
+def _fk_ondelete(foreign_key: dict[str, Any]) -> str | None:
+    """Read the FK ondelete action across dialect inspector layouts.
+
+    SQLAlchemy 2.0 reports ``options: {"ondelete": ...}`` (SQLite); other
+    dialects may expose a top-level ``ondelete``/``on_delete`` key.
+    """
+    options = foreign_key.get("options")
+    if isinstance(options, dict):
+        return options.get("ondelete") or options.get("on_delete")
+    return (
+        foreign_key.get("ondelete")
+        or foreign_key.get("on_delete")
+    )
+
+
+def _alembic_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Config:
+    monkeypatch.delenv("CODING_AGENT_DATABASE_URL", raising=False)
+    database_path = tmp_path / "migration.db"
+    project_root = Path(__file__).resolve().parents[1]
+    config = Config(str(project_root / "alembic.ini"))
+    config.set_main_option("script_location", str(project_root / "migrations"))
+    config.set_main_option(
+        "sqlalchemy.url", f"sqlite+pysqlite:///{database_path.as_posix()}"
+    )
+    return config
+
+
+def test_alembic_upgrade_head_relaxes_source_session_fk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _alembic_config(tmp_path, monkeypatch)
+
+    command.upgrade(config, "head")
+
+    engine = _create_engine(tmp_path / "migration.db")
+    try:
+        inspector = inspect(engine)
+        column = next(
+            c
+            for c in inspector.get_columns("memories")
+            if c["name"] == "source_session_id"
+        )
+        assert column["nullable"] is True
+        foreign_keys = inspector.get_foreign_keys("memories")
+        assert len(foreign_keys) == 1
+        assert foreign_keys[0]["referred_table"] == "sessions"
+        assert _fk_ondelete(foreign_keys[0]) == "SET NULL"
+        indexes = {idx["name"] for idx in inspector.get_indexes("memories")}
+        assert "ix_memories_user_project_status" in indexes
+    finally:
+        engine.dispose()
+
+
+def test_alembic_downgrade_restores_cascade_fk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _alembic_config(tmp_path, monkeypatch)
+
+    command.upgrade(config, "head")
+    command.downgrade(config, "0004_add_memory_metadata")
+
+    engine = _create_engine(tmp_path / "migration.db")
+    try:
+        inspector = inspect(engine)
+        column = next(
+            c
+            for c in inspector.get_columns("memories")
+            if c["name"] == "source_session_id"
+        )
+        assert column["nullable"] is False
+        foreign_keys = inspector.get_foreign_keys("memories")
+        assert _fk_ondelete(foreign_keys[0]) == "CASCADE"
+    finally:
+        engine.dispose()

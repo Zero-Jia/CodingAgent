@@ -18,6 +18,7 @@ from coding_agent.memory import (
     ModelExtractor,
     NoopMemoryStore,
     ReviewError,
+    create_memory_sync_service,
     persist_candidates,
 )
 from coding_agent.runtime.events import AgentEvent
@@ -282,7 +283,7 @@ def extract_memories(
                 err=True,
             )
 
-    extractor = MemoryExtractor(model=model_extractor)
+    extractor = MemoryExtractor(model=model_extractor, ttl_days=config.memory_ttl_days)
     candidates = asyncio.run(
         extractor.extract(
             checkpoint.messages,
@@ -441,6 +442,80 @@ def review_memories(
     typer.echo("\n" + "─" * 60)
     typer.echo(
         f"审核完成：promoted={promoted}  rejected={rejected}  skipped={skipped}"
+    )
+
+
+@app.command("sync-memories")
+def sync_memories(
+    workspace: Annotated[Path, typer.Option("--workspace", exists=True, file_okay=False)] = Path(
+        "."
+    ),
+    user_id: Annotated[
+        str, typer.Option("--user-id", help="记忆归属用户 ID。")
+    ] = "",
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="记忆归属项目 ID；默认取 workspace 绝对路径。"),
+    ] = None,
+    storage_backend: Annotated[
+        str | None, typer.Option("--storage", help="Session storage backend: jsonl or mysql.")
+    ] = None,
+    database_url: Annotated[
+        str | None, typer.Option("--database-url", help="SQLAlchemy database URL for memories.")
+    ] = None,
+    database_create_schema: Annotated[
+        bool,
+        typer.Option(
+            "--database-create-schema",
+            help="Create database tables at startup for local development and tests.",
+        ),
+    ] = False,
+) -> None:
+    """把 promoted 记忆批量写入 Milvus 记忆向量索引，供 recall 语义召回。"""
+    overrides: dict[str, object] = {}
+    if storage_backend is not None:
+        overrides["storage_backend"] = storage_backend
+    if database_url is not None:
+        overrides["database_url"] = database_url
+    if database_create_schema:
+        overrides["database_create_schema"] = True
+    config = AgentConfig.from_environment(workspace, **overrides)
+    data_root = config.workspace / ".coding-agent"
+
+    try:
+        memory_store = create_memory_store(config, data_root)
+    except StorageConfigError as error:
+        raise typer.BadParameter(str(error), param_hint="--database-url") from error
+
+    if isinstance(memory_store, NoopMemoryStore):
+        typer.echo(
+            "存储后端为 jsonl，记忆同步需要 mysql（--database-url）；无法同步。",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        service = create_memory_sync_service(config, memory_store)
+    except SemanticIndexError as error:
+        raise typer.BadParameter(str(error), param_hint="semantic config") from error
+
+    effective_project_id = project_id or str(config.workspace.resolve())
+    try:
+        stats = asyncio.run(
+            service.sync(user_id=user_id, project_id=effective_project_id)
+        )
+    except Exception as error:  # 同步是离线批处理：失败直接退出，让调用方感知
+        typer.echo(f"同步失败：{error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    typer.echo(
+        "\n".join(
+            [
+                f"已同步 promoted 记忆：{stats.synced}",
+                f"后端：{stats.backend}",
+                f"Collection：{stats.collection}",
+            ]
+        )
     )
 
 

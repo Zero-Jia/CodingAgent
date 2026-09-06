@@ -20,6 +20,99 @@
 
 ---
 
+### Session 2026-09-06（Memory TTL 过期 + 置信度衰减 + 归一化去重 + 来源外键放松）—— B1-6
+
+- **目标**：完成 B1-6：TTL 过期（提取时写 `expires_at`、召回/查询时过滤）、置信度半衰期衰减、内容归一化去重（memory_id）、`source_session_id` FK 从 CASCADE 放松为 SET NULL（删除 session 不再级联删除人工审核过的记忆）
+- **完成任务**：
+  - [B1-6] 记忆过期与置信度管理 — 改动文件：
+    - `src/coding_agent/config.py`：新增 `memory_ttl_days`（默认 90，ge=1，env `CODING_AGENT_MEMORY_TTL_DAYS`，支持设为 None 表示不过期）+ `memory_decay_half_life_days`（默认 30.0，gt=0，env `CODING_AGENT_MEMORY_DECAY_HALF_LIFE_DAYS`）
+    - `src/coding_agent/memory/extraction.py`：`MemoryExtractor` 编排层统一写 `expires_at = clock() + ttl_days`（Rule/Model 产出候选都覆盖）；`_memory_id` 改为归一化内容哈希（`re.sub(r"\s+", " ").strip().lower()` 后 SHA-256 前 32 位），大小写/空白差异不再产生重复记忆
+    - `src/coding_agent/memory/recall.py`：新增模块级 `effective_confidence(record, now, half_life_days)`（`confidence × 0.5^(age_days/half_life)`，未来时间戳按 0 天龄处理）；`_is_recallable` 增加 `expires_at <= now` 软过期检查；向量通道与 metadata 保底统一按 effective confidence 过滤（`memory_recall_min_confidence`）并作为打分输出
+    - `src/coding_agent/memory/mysql.py`：`list_promoted`/`search` 增加 `_not_expired_clause()`（`expires_at IS NULL OR expires_at > now`，`list_by_status` 不过滤——审核界面需看到全部）；`_record_from_row` 把 NULL `source_session_id` 映射为 `""`
+    - `src/coding_agent/db/tables.py`：`source_session_id` 改 nullable，FK `ondelete` 改 SET NULL
+    - `migrations/versions/0005_memory_source_session_set_null.py`（新）：SQLite 走 `batch_alter_table(copy_from=完整表定义, recreate="always")` 重建表（copy_from 的 FK 必须显式命名，batch drop_constraint 按名称匹配）；MySQL 走 inspector 查 FK 名 → `drop_constraint` → `alter_column nullable` → `create_foreign_key SET NULL`；downgrade 恢复 NOT NULL 前先 `DELETE FROM memories WHERE source_session_id IS NULL`
+    - `tests/test_memory_recall.py`：新增过期不召回、衰减后低于 min_confidence 被过滤、衰减值随年龄递减等测试
+    - `tests/test_memory_extraction.py`：新增归一化 memory_id（大小写/多空白一致）、TTL 写入 `expires_at` 测试
+    - `tests/test_memory_store_contract.py`：新增删除 session 后记忆保留且 source 映射为 ""、migration 0005 upgrade 后 nullable+SET NULL、downgrade 恢复 CASCADE 等测试
+- **关键决策**：
+  - **软过期不做物理删除**：`expires_at` 只在召回/查询层过滤，`list_by_status` 保留全量供审核界面；物理清理留给后续任务
+  - **衰减只影响召回打分与过滤，不改存储值**：`confidence` 列保持审核时的原始值，effective confidence 在读取时计算，避免写放大且可随时调整半衰期
+  - **memory_id 归一化 vs 向量同步**：归一化让" Please remember ..."与"please remember..."共享同一条记录，`persist_candidates` 的幂等去重天然受益；已被 sync 写入向量索引的记录不受影响（memory_id 不变）
+  - **FK 放松方向**：B1-3 当时收紧为 CASCADE 是防止悬空引用；B1-6 反转决策——人工审核过的记忆价值高于来源 session，session 删除后记忆保留、来源降级为 `""`（unknown）
+  - **SQLite batch 重建要求约束具名**：copy_from 表定义里 FK 命名仅是 alembic 内部簿记（SQLite DDL 不落 FK 名），与真实库中 0004 的匿名 FK 无冲突
+- **遇到的问题**：
+  - alembic batch 模式 `drop_constraint(None, type_="foreignkey")` 抛 `ValueError: Constraint must have a name`：batch 的 `ApplyBatchImpl` 按名称从 `named_constraints` 弹出约束，`copy_from` 定义中 FK 未命名就无法 drop；改为 copy_from 中显式命名 FK 后按名 drop
+  - 测试断言 `inspector.get_foreign_keys()` 的键名：SQLAlchemy 2.0 SQLite 返回 `options: {"ondelete": "SET NULL"}` 而非顶层 `on_delete`；新增 `_fk_ondelete` 辅助兼容两种布局
+  - mypy 两个类型问题：`float ** float` 在 typeshed 返回 `Any`（负底数可为 complex），用 `float(...)` 包裹；`_not_expired_clause` 缺返回注解，补 `ColumnElement[bool]`
+- **验证结果**：
+  - ruff check：All checks passed
+  - mypy（全量 src）：Success, 64 source files
+  - pytest：239 passed, 1 skipped（基线 223/1 → +16 新增 B1-6 测试）
+- **未完成/遗留**：
+  - 过期记忆的物理清理（GC）与向量索引中过期/拒绝记忆的同步清理未做（当时决策：仅软过滤）
+  - metadata 保底通道对自然语言 query 召回弱（B1-1 契约限制，整条 query 子串匹配）
+- **下一步建议**：B1 全部完成，进入 B2-1（MCP server 配置与连接管理器）
+
+---
+
+### Session 2026-09-06（promoted 记忆向量索引同步）—— B1-2b
+
+- **目标**：完成 B1-6 前置小任务（B1-2 遗留）：`store.list_promoted` → embed → `index.upsert`，把 promoted 记忆批量写入 Milvus 记忆向量索引，使 B1-5 recall 的向量通道有数据可召回
+- **完成任务**：
+  - [B1-2b] promoted 记忆向量索引同步 — 改动文件：
+    - `src/coding_agent/memory/sync.py`（新）：`MemorySyncService.sync`（`list_promoted` → `ensure_collection` → 按 `batch_size=20` 分批 embed + `upsert`，以 memory_id 幂等覆盖；空结果短路、不触达索引/连接）+ `MemorySyncStats`（synced/backend/collection）+ `create_memory_sync_service` 工厂（semantic 未启用或缺 DashScope key 抛 `SemanticIndexError`）。批处理任务错误直接抛出（区别于 runtime recall 的静默降级）
+    - `src/coding_agent/cli/app.py`：新增 `agent sync-memories` 命令（`--user-id/--project-id/--storage/--database-url/--database-create-schema`；jsonl 后端报错 exit 1；`SemanticIndexError` → BadParameter；同步失败 exit 1）
+    - `src/coding_agent/memory/__init__.py`：导出 sync 相关符号
+    - `tests/test_memory_sync.py`（新）：10 个测试（upsert 全量/用户项目过滤透传/空结果短路且不 ensure/幂等重跑/batch_size 分批与 embed 调用记录/embedding 失败传播/batch_size 校验/工厂三种路径）
+- **关键决策**：
+  - **仅 upsert，不删除**：被 reject 的记忆若曾同步会残留索引，但 recall 会回查 `store.get` 校验状态后才注入，正确性不受影响；索引清理留给 B1-6
+  - **空结果短路**：无 promoted 记忆时不调 `ensure_collection`，避免 Milvus 不可达时"同步 0 条"反而报错
+  - **错误策略**：离线批处理与 runtime 相反——失败直接抛出让调用方感知，不做静默降级
+- **遇到的问题**：
+  - 初版 `sync()` 遗漏 `synced = 0` 初始化（会 UnboundLocalError），自查修正；`apply_memory_section` 已在 B1-5 修复 header 重复，本任务复用正常
+- **验证结果**：
+  - ruff check：All checks passed
+  - mypy（全量 src）：Success, 64 source files
+  - pytest：223 passed, 1 skipped（基线 213/1 → +10 新增 sync 测试）
+- **未完成/遗留**：
+  - B1-6 未动：TTL、置信度衰减、去重合并、`source_session_id` FK CASCADE 收紧、索引中过期/拒绝记忆的清理
+  - metadata 保底通道对自然语言 query 召回弱（整条 query 子串匹配，B1-1 契约限制）
+- **下一步建议**：直接做 B1-6（记忆过期与置信度管理）
+
+---
+
+### Session 2026-09-06（Memory recall 注入 runtime context）—— B1-5
+
+- **目标**：完成 B1-5，任务开始时按 user message 召回高置信 promoted 记忆（语义召回 + metadata 保底），注入 system context，闭合 Memory 端到端链路。不实现过期/置信度衰减（B1-6）
+- **完成任务**：
+  - [B1-5] Memory recall 注入 runtime context — 改动文件：
+    - `src/coding_agent/memory/recall.py`（新）：`MemoryRecallService`（双通道召回：向量优先 `MemoryVectorIndex.search` + `store.get` 逐条校验 promoted/置信度；语义不可用/无命中/抛错时走 `MemoryStore.search` metadata 保底）+ `RecalledMemory` + `format_recall_block`（含 header、category、confidence、source，max_chars 截断）+ `apply_memory_section`/`strip_memory_section`（幂等注入：每次先剥离旧记忆段再追加，避免跨回合累积）。召回永不阻断回合：向量通道异常 → metadata 保底；metadata 也异常 → 空结果
+    - `src/coding_agent/config.py`：新增 `memory_recall_enabled`（默认 False）、`memory_recall_top_k`、`memory_recall_min_confidence`、`memory_recall_min_score`、`memory_recall_max_chars`、`memory_user_id`、`memory_project_id` 字段 + 环境变量 `CODING_AGENT_MEMORY_RECALL`/`CODING_AGENT_MEMORY_USER_ID`/`CODING_AGENT_MEMORY_PROJECT_ID`/`CODING_AGENT_MEMORY_RECALL_*`；补 `_env_float` 辅助；**修复 B1-2 遗留 bug**：`milvus_memory_collection` 只在 env 装配出现、从未声明为字段（pydantic 静默丢弃），补字段声明
+    - `src/coding_agent/agent/coding_agent.py`：`CodingAgent.__init__` 装配 `memory_recall`（`_create_memory_recall`：未启用 → None；jsonl → NoopMemoryStore；mysql → 复用 session store 的 engine 不重复建池；semantic=milvus + DashScope key → 启用向量通道）；`ChatSession.send()` 在 context prepare 前调用 `_apply_memory_recall(user_message)`，按本轮 query 召回并刷新 `messages[0]` system message 尾部记忆段
+    - `src/coding_agent/memory/__init__.py`：导出 recall 相关符号
+    - `tests/test_memory_recall.py`（新）：23 个测试（向量召回命中/min_score 过滤/min_confidence 与非 promoted 过滤/metadata 保底三种触发路径/向量通道抛错降级/metadata 也失败返回空不抛出/Noop 空/top_k 截断/空 query 短路/vector_index 必须配 embedder/格式化与截断/注入剥离往返/跨回合替换/装配默认关闭与 jsonl 降级/ChatSession 注入、替换、剥离、无 service no-op）
+- **关键决策**：
+  - **注入点在 ChatSession 层而非 runtime loop**：`send()` 里 compact 之前召回并刷新 `messages[0]` 尾部记忆段；system message 在 `start_chat` 恢复时本就会被 refresh，checkpoint 天然兼容，且不侵入 `AgentRuntime`
+  - **每回合按 query 召回、替换式注入**：先 `strip_memory_section` 剥离旧段再追加，避免多回合重复累积；召回为空时也剥离，system 回到干净基线
+  - **metadata 保底语义**：仅当向量通道未启用/无命中/抛错时才走 `store.search`（整条 query 子串匹配，B1-1 契约）；向量命中后不再叠加 metadata 结果
+  - **降级策略**：`recall()` 内部吞异常（Milvus 不可达、embedding 失败、存储错误）返回空/保底结果，绝不阻断正常回合；`memory_recall_enabled` 默认 False，旧行为完全不变
+  - **身份来源**：`memory_user_id` 默认空串、`memory_project_id` 默认空串（runtime 侧 fallback 到 workspace 绝对路径），与 B1-3/B1-4 CLI 的约定一致
+- **遇到的问题**：
+  - mypy 暴露 B1-2 遗留 bug：`milvus_memory_collection` 环境变量装配了但 `AgentConfig` 没有该字段，pydantic 静默忽略；本轮补上字段声明
+  - ChatSession 测试初次失败：`MemoryStore.search` 契约是整条 query 子串匹配，测试用自然语言句子（"关于 ruff 的约定"）当然不命中 content；改用单词查询后通过。注意：**metadata 保底通道对自然语言 query 的召回能力有限，这是 B1-1 契约的已知限制**，语义通道（向量）才是主力
+  - `apply_memory_section` 初版重复拼接 header（block 本身以 header 开头又加了 marker 前缀），测试抓住后修正
+- **验证结果**：
+  - ruff check：All checks passed
+  - mypy（全量 src）：Success, 63 source files
+  - pytest：213 passed, 1 skipped（基线 190/1 → +23 新增 recall 测试）
+- **未完成/遗留**：
+  - 没有"把 promoted 记忆批量写入向量索引"的 service/CLI（B1-2 遗留）：没有它，向量通道无数据可召回，运行时实际只走 metadata 保底。建议下个 session 补 `sync-memories` CLI（`store.list_promoted` → embed → `index.upsert`）
+  - metadata 保底用整条 query 子串匹配，自然语言 query 召回弱；可在 B1-6 或后续迭代改进（分词/关键词抽取）
+  - B1-6 未动：TTL、置信度衰减、去重合并、`source_session_id` FK CASCADE 收紧
+- **下一步建议**：先补"promoted 记忆向量索引同步"小任务（闭合 B1-2/B1-5 向量链路），再做 B1-6（记忆过期与置信度管理）
+
+---
+
 ### Session 2026-09-05（Milvus memory vector collection）
 
 - **目标**：完成 B1-2，为 promoted 记忆建立独立 Milvus collection，提供语义召回能力。复用 `semantic/milvus.py` 模式，不实现 recall 注入 runtime（B1-5）、过期管理（B1-6）

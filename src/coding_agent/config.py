@@ -28,6 +28,7 @@ class AgentConfig(BaseModel):
     milvus_token: SecretStr | None = Field(default=None, exclude=True)
     milvus_database: str = "default"
     milvus_collection: str = "coding_agent_code_chunks"
+    milvus_memory_collection: str = "coding_agent_memories"
     semantic_top_k: int = Field(default=8, ge=1, le=50)
     semantic_max_file_bytes: int = Field(default=800_000, ge=1)
     semantic_max_chunk_chars: int = Field(default=6_000, ge=500)
@@ -60,6 +61,15 @@ class AgentConfig(BaseModel):
     context_chars_per_token: float = 3.5
     context_summary_max_chars: int = 8_000
     trace_level: str = "redacted"
+    memory_recall_enabled: bool = False
+    memory_recall_top_k: int = Field(default=5, ge=1, le=20)
+    memory_recall_min_confidence: float = Field(default=0.6, ge=0.0, le=1.0)
+    memory_recall_min_score: float = Field(default=0.5, ge=0.0, le=1.0)
+    memory_recall_max_chars: int = Field(default=2_000, ge=200)
+    memory_user_id: str = ""
+    memory_project_id: str = ""
+    memory_ttl_days: int | None = Field(default=90, ge=1)
+    memory_decay_half_life_days: float = Field(default=30.0, gt=0.0)
 
     @field_validator("storage_backend", mode="before")
     @classmethod
@@ -143,6 +153,40 @@ class AgentConfig(BaseModel):
             "milvus_memory_collection": overrides.pop(
                 "milvus_memory_collection",
                 env.get("CODING_AGENT_MILVUS_MEMORY_COLLECTION", "coding_agent_memories"),
+            ),
+            "memory_recall_enabled": overrides.pop(
+                "memory_recall_enabled",
+                _env_bool(env, "CODING_AGENT_MEMORY_RECALL", False),
+            ),
+            "memory_recall_top_k": overrides.pop(
+                "memory_recall_top_k",
+                _env_int(env, "CODING_AGENT_MEMORY_RECALL_TOP_K", 5),
+            ),
+            "memory_recall_min_confidence": overrides.pop(
+                "memory_recall_min_confidence",
+                _env_float(env, "CODING_AGENT_MEMORY_RECALL_MIN_CONFIDENCE", 0.6),
+            ),
+            "memory_recall_min_score": overrides.pop(
+                "memory_recall_min_score",
+                _env_float(env, "CODING_AGENT_MEMORY_RECALL_MIN_SCORE", 0.5),
+            ),
+            "memory_recall_max_chars": overrides.pop(
+                "memory_recall_max_chars",
+                _env_int(env, "CODING_AGENT_MEMORY_RECALL_MAX_CHARS", 2000),
+            ),
+            "memory_user_id": overrides.pop(
+                "memory_user_id", env.get("CODING_AGENT_MEMORY_USER_ID", "")
+            ),
+            "memory_project_id": overrides.pop(
+                "memory_project_id", env.get("CODING_AGENT_MEMORY_PROJECT_ID", "")
+            ),
+            "memory_ttl_days": overrides.pop(
+                "memory_ttl_days",
+                _env_int_or_none(env, "CODING_AGENT_MEMORY_TTL_DAYS", 90),
+            ),
+            "memory_decay_half_life_days": overrides.pop(
+                "memory_decay_half_life_days",
+                _env_float(env, "CODING_AGENT_MEMORY_DECAY_HALF_LIFE_DAYS", 30.0),
             ),
             "semantic_top_k": overrides.pop(
                 "semantic_top_k", _env_int(env, "CODING_AGENT_SEMANTIC_TOP_K", 8)
@@ -250,6 +294,28 @@ def _env_int(env: dict[str, str], name: str, default: int) -> int:
         return int(value)
     except ValueError as error:
         raise ValueError(f"{name} must be an integer") from error
+
+
+def _env_float(env: dict[str, str], name: str, default: float) -> float:
+    value = env.get(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return float(value)
+    except ValueError as error:
+        raise ValueError(f"{name} must be a number") from error
+
+
+def _env_int_or_none(env: dict[str, str], name: str, default: int | None) -> int | None:
+    """解析可选正整数环境变量；显式设为 <=0 表示 None（关闭该功能）。"""
+    value = env.get(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise ValueError(f"{name} must be an integer") from error
+    return parsed if parsed > 0 else None
 
 
 def _env_bool(env: dict[str, str], name: str, default: bool) -> bool:

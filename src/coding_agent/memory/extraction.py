@@ -22,7 +22,8 @@ import asyncio
 import hashlib
 import json
 import re
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
 from coding_agent.ai.contracts import (
     ChatMessage,
@@ -164,16 +165,24 @@ class ModelExtractor:
 
 
 class MemoryExtractor:
-    """编排：规则优先、模型补位，按 memory_id 去重合并。"""
+    """编排：规则优先、模型补位，按 memory_id（归一化 content hash）去重合并。
+
+    ``ttl_days``（B1-6）：产出候选时统一写入 ``expires_at = now + ttl``；
+    ``None`` 表示不过期。``clock`` 仅供测试注入固定时间。
+    """
 
     def __init__(
         self,
         *,
         rule: RuleExtractor | None = None,
         model: ModelExtractor | None = None,
+        ttl_days: int | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.rule = rule or RuleExtractor()
         self.model = model
+        self.ttl_days = ttl_days
+        self.clock = clock or (lambda: datetime.now(UTC))
 
     async def extract(
         self,
@@ -213,7 +222,12 @@ class MemoryExtractor:
                 for record in model_records:
                     # 规则与模型产出同 content → 同 memory_id，规则版（高置信）优先。
                     merged.setdefault(record.memory_id, record)
-        return list(merged.values())
+        records = list(merged.values())
+        if self.ttl_days is not None:
+            expires_at = self.clock() + timedelta(days=self.ttl_days)
+            for record in records:
+                record.expires_at = expires_at
+        return records
 
 
 async def persist_candidates(
@@ -365,14 +379,13 @@ def _make_record(
 
 
 def _memory_id(content: str) -> str:
-    """content-only hash，使相同内容跨 session 自动合并。
+    """归一化 content（折叠空白 + 小写）hash，使相同内容跨 session 自动合并。
 
-    注意：``memories.source_session_id`` 是 FK→sessions(ondelete CASCADE)，
-    若源 session 行被显式删除，该记忆会被级联删除——即使内容也在其它 session
-    出现过。这是 B1-3 的已知限制，B1-6 可通过让 source_session_id 可空或
-    解耦 FK 来收紧。
+    B1-6 归一化去重："Always run Ruff" 与 "always run ruff" 视为同一条记忆，
+    避免大小写/空白差异导致重复候选。
     """
-    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    normalized = re.sub(r"\s+", " ", content).strip().lower()
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     return digest[:32]
 
 

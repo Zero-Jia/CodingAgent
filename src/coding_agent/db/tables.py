@@ -277,8 +277,8 @@ memories = Table(
     Column(
         "source_session_id",
         String(128),
-        ForeignKey("sessions.session_id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("sessions.session_id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     ),
     Column("source_run_id", String(128), nullable=False, server_default=""),
