@@ -161,14 +161,25 @@ class _BaseMcpConnection:
     async def list_tools(self) -> list[McpToolSchema]:
         session = self._require_session()
         try:
-            result: ListToolsResult = await asyncio.wait_for(
-                session.list_tools(), self._config.timeout_seconds
-            )
+            tools: list[McpToolSchema] = []
+            cursor: str | None = None
+            seen: set[str] = set()
+            # One deadline for the whole listing, including all pages.
+            async with asyncio.timeout(self._config.timeout_seconds):
+                for _ in range(100):
+                    result: ListToolsResult = await session.list_tools(cursor=cursor)
+                    tools.extend(_tool_to_schema(tool) for tool in result.tools)
+                    cursor = result.nextCursor
+                    if cursor is None:
+                        return tools
+                    if cursor in seen:
+                        raise ValueError("repeated tools/list cursor")
+                    seen.add(cursor)
+                raise ValueError("tools/list exceeded 100 pages")
         except Exception as error:
             raise McpConnectionError(
                 f"list_tools on MCP server {self._config.name} failed: {error}"
             ) from error
-        return [_tool_to_schema(tool) for tool in result.tools]
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> McpToolResult:
         session = self._require_session()

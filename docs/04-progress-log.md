@@ -20,6 +20,43 @@
 
 ---
 
+### Session 2026-09-07（MCP 工具动态发现与 schema 注册）—— B2-2
+
+- **目标**：按用户确认完成 B2-2：发现 MCP 工具、转换 schema 并注册到 runtime，实际执行仍拒绝。
+- **完成任务**：
+  - `src/coding_agent/mcp/discovery.py`（新增）：`McpDiscoveryService`、`DiscoveredMcpTool`、`McpDiscoveryResult`，每次发现独立连接管理器，失败隔离、原始名称路由信息、稳定 ASCII 注册名（服务/工具片段 + 原始名称对 SHA-256 前 24 位，最长 61 字符）。
+  - `src/coding_agent/mcp/connection.py`：按 `nextCursor` 拉取工具列表，整次列表共用超时，拒绝循环游标及超过 100 页的列表，不发布部分结果。
+  - `src/coding_agent/mcp/contracts.py`、`__init__.py`：更新说明并导出发现契约。
+  - `src/coding_agent/tools/mcp.py`（新增）：schema-only `McpTool`、`register_mcp_tools`；幂等替换 MCP 快照，移除过期条目，冲突时原工具表不变。
+  - `src/coding_agent/agent/coding_agent.py`：每回合首次模型请求前发现并注册，连接在模型请求前关闭；支持会话取消及 asyncio 任务取消；发现错误仅写应用日志分类与数量。
+  - `src/coding_agent/policy/engine.py`：显式拒绝 `mcp__` 前缀工具；适配器自身也拒绝 execute，开启 shell/write 权限不改变此边界。
+  - `tests/test_mcp_discovery.py`（新增）：26 个测试，覆盖分页、超时、命名、schema 保留/结构校验、失效快照清理、连接失败隔离、模型可见定义、调用拒绝及取消清理。`tests/test_mcp_lifecycle.py` 更新分页结果替身。
+  - 更新 README、backlog 与 handoff，B2-2 标记 done。
+- **关键决策**：
+  - 使用现有 runtime 字典注册表，无新增依赖、数据库变更或 CLI 命令。
+  - 每回合获取新快照，发现后断开；B2-3 再设计实际调用期间的连接生命周期。
+  - schema 保留原始嵌套结构，校验根 type=object、properties/required 结构及 JSON 序列化。服务内重复工具、无效 schema 或名称冲突拒绝整份服务列表，避免部分注册。
+- **验证结果**：
+  - `.venv/Scripts/ruff.exe check`：通过。
+  - `.venv/Scripts/mypy.exe` 与 `.venv/Scripts/mypy.exe src`：通过，69 source files。
+  - `.venv/Scripts/python.exe -m pytest --basetemp .codex-test-tmp-b22-verified -p no:cacheprovider`：319 passed / 2 skipped（13.36s）。
+  - 沿用现有虚拟环境；本轮无新增依赖，无需重新 lock。文档收尾执行 `git diff --check`。
+- **未完成/遗留**：未连接真实服务；未实现完整 JSON Schema / 调用参数校验、回合内工具变更通知、MCP 实际调用和输出包装。上述边界已记录 README 与 handoff。
+- **下一步建议**：B2-3 MCP 工具包装（policy + trace + 输出预算），随后 B2-4 调用审计与脱敏；不得将默认拒绝直接改为无限制执行。
+
+---
+
+### Session 2026-09-07（B2-1 收尾确认与下一任务规划）
+
+- **目标**：确认本轮 B2-1 已完成，整理交接并选择下一项 todo；本次只更新文档。
+- **完成任务**：B2-1 保持 `done`；此前实现、55 个 MCP 测试及配置示例已完成，详细改动见下方 B2-1 实现记录。
+- **验证结果**：沿用本 session 已执行的结果：ruff、两种 mypy 检查通过（67 source files），全量 293 passed / 2 skipped，离线 lock 检查通过。本次文档收尾仅检查 diff，未重跑代码测试。
+- **未完成/遗留**：真实 MCP 服务联调、全新环境安装未验证；工具发现注册、policy/trace 与审计脱敏仍属后续任务。
+- **下一步建议**：选择 B2-2 MCP 工具动态发现与 schema 注册，保持 `todo`，等待用户确认后开始。拟新增发现/注册层，处理分页、命名冲突、重复注册和单服务失败；接入现有工具定义与装配层，保持默认拒绝 MCP 执行，执行包装交给 B2-3。
+- **本次文档**：`docs/04-progress-log.md`、`docs/03-task-backlog.md`。
+
+---
+
 ### Session 2026-09-07（接续 Trae 的 MCP 配置与连接管理实现）—— B2-1
 
 - **目标**：在已有未提交实现上完成 B2-1，沿用用户已确认的官方 MCP SDK + 最小 CLI 方案。

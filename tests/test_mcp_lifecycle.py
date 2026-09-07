@@ -40,7 +40,7 @@ def sdk(monkeypatch):
     async def session(*args, **kwargs):
         state.session = SimpleNamespace(
             initialize=AsyncMock(), send_ping=AsyncMock(),
-            list_tools=AsyncMock(return_value=SimpleNamespace(tools=[])),
+            list_tools=AsyncMock(return_value=SimpleNamespace(tools=[], nextCursor=None)),
             call_tool=AsyncMock(),
         )
         async with anyio.create_task_group():

@@ -52,8 +52,7 @@ class McpServerConfig(BaseModel):
 class McpToolSchema(BaseModel):
     """MCP 工具的 schema 摘要。
 
-    B2-1 只用于诊断输出（``mcp list``）；B2-2 会把 schema 注册到 agent
-    tool registry。
+    用于诊断输出（``mcp ping``）与 B2-2 的 agent tool registry 注册。
     """
 
     name: str

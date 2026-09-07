@@ -11,6 +11,7 @@ from pathlib import Path
 
 from coding_agent.ai.contracts import ChatMessage, ModelAdapter, Usage
 from coding_agent.config import AgentConfig
+from coding_agent.mcp.discovery import McpDiscoveryService
 from coding_agent.memory.contracts import MemoryStore, MemoryVectorIndex, NoopMemoryStore
 from coding_agent.memory.mysql import MySqlMemoryStore
 from coding_agent.memory.recall import (
@@ -45,6 +46,7 @@ from coding_agent.tools.builtin import (
     SearchTool,
 )
 from coding_agent.tools.contracts import Tool, ToolContext
+from coding_agent.tools.mcp import McpTool, register_mcp_tools
 from coding_agent.tools.plan import SubmitPlanTool
 from coding_agent.tools.sandbox import ApplyPatchTool, SandboxCommandTool
 from coding_agent.tools.semantic import SemanticSearchTool
@@ -87,6 +89,7 @@ class ChatSession:
         self.session_id = session_id
         self.messages = messages
         self._active_runtime: AgentRuntime | None = None
+        self._mcp_discovery_task: asyncio.Task[None] | None = None
         self._turn_lock = asyncio.Lock()
         self.summary = SessionSummary(
             session_id=session_id,
@@ -210,6 +213,17 @@ class ChatSession:
             runtime = self._agent._new_runtime()
             self._active_runtime = runtime
             try:
+                if self._agent.config.mcp_servers:
+                    self._mcp_discovery_task = asyncio.create_task(
+                        self._agent._register_mcp_tools(runtime)
+                    )
+                    try:
+                        await self._mcp_discovery_task
+                    except asyncio.CancelledError:
+                        if not runtime.cancel_signal.is_set():
+                            raise
+                    finally:
+                        self._mcp_discovery_task = None
                 async for event in runtime.run_turn(
                     self.messages, message, self.session_id, run_id
                 ):
@@ -288,6 +302,8 @@ class ChatSession:
         if self._active_runtime is None:
             return False
         self._active_runtime.cancel()
+        if self._mcp_discovery_task is not None:
+            self._mcp_discovery_task.cancel()
         return True
 
     async def clear_context(self) -> None:
@@ -338,6 +354,19 @@ class CodingAgent:
         self.application_log = ApplicationLog(self.data_root)
         self.artifacts = JsonlArtifactStore(self.data_root)
         self.memory_recall = _create_memory_recall(config, self.sessions)
+        self.mcp_discovery = McpDiscoveryService(config.mcp_servers)
+
+    async def _register_mcp_tools(self, runtime: AgentRuntime) -> None:
+        discovery = await self.mcp_discovery.discover(reserved_names={
+            name for name, tool in runtime.tools.items() if not isinstance(tool, McpTool)
+        })
+        register_mcp_tools(runtime.tools, discovery)
+        if discovery.errors:
+            await self.application_log.write(
+                "warning", "mcp_discovery_incomplete",
+                failed_servers=len(discovery.errors),
+                error_categories=sorted(set(discovery.errors.values())),
+            )
 
     async def repository_context(self) -> RepositoryContext:
         return await WorkspaceService(self.config.workspace).inspect()

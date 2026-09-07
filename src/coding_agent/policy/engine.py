@@ -41,6 +41,8 @@ class PolicyEngine:
         return self._authorization("write operation", self.allow_write)
 
     def tool_decision(self, tool_name: str, params: dict[str, object]) -> PolicyDecision:
+        if tool_name.startswith("mcp__"):
+            return PolicyDecision("deny", "MCP execution is not enabled (B2-3 pending)")
         if tool_name in {"read", "edit", "write"}:
             raw_path = params.get("path")
             if not isinstance(raw_path, str):

@@ -257,7 +257,7 @@ API 层只封装 `CodingAgent` 和 `ChatSession`，不复制 agent loop，也不
 `coding_agent.evals` 提供可重复的场景和报告契约。测试覆盖未授权写入/Shell 拒绝、敏感文件拒绝、快照过滤、危险补丁拒绝、补丁回写的并发改动检测、验证变更丢弃以及会话存储的基本行为。报告会明确区分自动化测量指标与需要人工审核的项目，绝不伪造“代码质量评分”。
 
 
-## MCP 配置与连接诊断（B2-1）
+## MCP 配置、连接诊断与工具发现（B2-1/B2-2）
 
 通过 `CODING_AGENT_MCP_SERVERS` 设置 JSON 数组，默认空列表。支持 `stdio` 和
 Streamable HTTP（`http`）。示例（PowerShell）：
@@ -277,5 +277,23 @@ uv --cache-dir .uv-cache run agent mcp ping local
 Python 层可用 `McpConnectionManager` 的 `async with`、`connect(name)`、
 `restart(name)`、`disconnect(name)`、`status()` 管理连接。生命周期 API 使用同一个
 asyncio event loop，可由不同任务调用；`is_alive` 仅表示本地 session 状态，远端健康需
-主动 `ping()`。当前没有将 MCP 工具注册到模型/runtime；工具注册和 policy/trace 集成
-将在 B2-2/B2-3/B2-4 完成。
+主动 `ping()`。
+
+配置 MCP 服务后，`ChatSession.send()` 在每回合首次模型请求前拉取工具定义并注册到
+runtime。空配置不发起 MCP IO。发现完成后立即关闭连接，模型可看到工具描述与输入
+schema，但 **MCP 工具调用暂时始终拒绝**，即使开启 `allow_shell` / `allow_write`；
+调用包装与审计留待 B2-3/B2-4。stdio 服务会在每次发现时启动操作者配置的程序。
+
+工具注册名格式为 `mcp__<服务片段>__<工具片段>__<原始名称对哈希>`，仅包含 ASCII
+字母、数字、下划线和连字符，最长 61 字符；保留原服务名和工具名供后续调用路由使用。
+服务之间同名工具互不覆盖，内置工具保持原名。每回合获取新快照；旧工具不会在服务
+删除工具或发现失败后残留。当前不订阅 `tools/list_changed`，回合内的变更下回合生效。
+
+`tools/list` 按 `nextCursor` 拉取全部分页，整次列表共用 `timeout_seconds`，最多
+100 页，重复游标或超限视为发现失败。输入 schema 保留嵌套结构，检查根 `type=object`、
+`properties` / `required` 结构和 JSON 可序列化性；尚未实现完整 JSON Schema 校验或
+调用参数校验。重复工具名、无效 schema 或注册冲突会拒绝该服务整份列表，不影响其他服务。
+发现失败在应用日志中记录 `mcp_discovery_incomplete`（数量与错误类别）。
+
+Python 层可独立使用 `McpDiscoveryService.discover()` 获取定义与分类错误，再用
+`register_mcp_tools()` 将新快照幂等注册到工具表。发现过程支持取消并释放已打开连接。

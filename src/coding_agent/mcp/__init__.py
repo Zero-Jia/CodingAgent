@@ -1,7 +1,7 @@
-"""MCP（Model Context Protocol）集成（B2-1）。
+"""MCP（Model Context Protocol）配置、连接及工具发现（B2-1/B2-2）。
 
-B2-1 只提供 server 配置与 stdio / HTTP 连接生命周期管理。工具发现注册
-（B2-2）、policy/trace 包装（B2-3）、调用审计脱敏（B2-4）由后续任务实现。
+工具发现仅注册 schema；policy/trace 执行包装（B2-3）、调用审计脱敏
+（B2-4）由后续任务实现。
 """
 
 from coding_agent.mcp.connection import (
@@ -21,8 +21,15 @@ from coding_agent.mcp.contracts import (
     McpToolSchema,
     McpTransport,
 )
+from coding_agent.mcp.discovery import (
+    DiscoveredMcpTool,
+    McpDiscoveryResult,
+    McpDiscoveryService,
+    mcp_tool_name,
+)
 
 __all__ = [
+    "DiscoveredMcpTool",
     "HttpMcpConnection",
     "InMemoryMcpConnection",
     "McpConnection",
@@ -30,10 +37,13 @@ __all__ = [
     "McpConnectionFactory",
     "McpConnectionManager",
     "McpConnectionStatus",
+    "McpDiscoveryResult",
+    "McpDiscoveryService",
     "McpServerConfig",
     "McpToolResult",
     "McpToolSchema",
     "McpTransport",
     "StdioMcpConnection",
     "create_mcp_connection",
+    "mcp_tool_name",
 ]
