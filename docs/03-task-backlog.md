@@ -24,7 +24,7 @@
 
 | 编号 | 任务 | 状态 | 实际改动文件 | 备注 |
 |---|---|---|---|---|
-| B2-1 | MCP server 配置与连接管理器 | todo | — | 配置 MCP server 列表，管理 stdio / HTTP 连接生命周期 |
+| B2-1 | MCP server 配置与连接管理器 | done | `src/coding_agent/mcp/__init__.py`、`contracts.py`、`connection.py`、`src/coding_agent/config.py`、`src/coding_agent/cli/app.py`、`pyproject.toml`、`uv.lock`、`tests/test_mcp_connection.py`、`tests/test_mcp_lifecycle.py`、`README.md` | 官方 mcp==1.9.4；stdio / Streamable HTTP；独立任务管理 SDK 生命周期，超时、取消清理、并发启停、重启、失败隔离；JSON 配置 + CLI mcp list/ping；55 个 MCP 测试，全量 293 passed / 2 skipped。未注册 runtime 工具（B2-2） |
 | B2-2 | MCP 工具动态发现与 schema 注册 | todo | — | 启动时拉取 MCP tools，注册到 tool registry |
 | B2-3 | MCP 工具包装（policy + trace + 输出预算） | todo | — | MCP 调用经过 policy 决策、trace 记录、输出脱敏和预算限制 |
 | B2-4 | MCP 调用审计与脱敏 | todo | — | MCP 工具结果写入 trace，敏感信息脱敏 |

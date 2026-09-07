@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
+
+from coding_agent.mcp import McpServerConfig
 
 StorageBackend = Literal["jsonl", "mysql"]
 SemanticBackend = Literal["disabled", "milvus"]
@@ -70,6 +73,7 @@ class AgentConfig(BaseModel):
     memory_project_id: str = ""
     memory_ttl_days: int | None = Field(default=90, ge=1)
     memory_decay_half_life_days: float = Field(default=30.0, gt=0.0)
+    mcp_servers: list[McpServerConfig] = Field(default_factory=list)
 
     @field_validator("storage_backend", mode="before")
     @classmethod
@@ -187,6 +191,11 @@ class AgentConfig(BaseModel):
             "memory_decay_half_life_days": overrides.pop(
                 "memory_decay_half_life_days",
                 _env_float(env, "CODING_AGENT_MEMORY_DECAY_HALF_LIFE_DAYS", 30.0),
+            ),
+            "mcp_servers": (
+                overrides.pop("mcp_servers")
+                if "mcp_servers" in overrides
+                else _env_mcp_servers(env, "CODING_AGENT_MCP_SERVERS")
             ),
             "semantic_top_k": overrides.pop(
                 "semantic_top_k", _env_int(env, "CODING_AGENT_SEMANTIC_TOP_K", 8)
@@ -328,3 +337,22 @@ def _env_bool(env: dict[str, str], name: str, default: bool) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     raise ValueError(f"{name} must be one of: 1, 0, true, false, yes, no, on, off")
+
+
+def _env_mcp_servers(env: dict[str, str], name: str) -> list[McpServerConfig]:
+    """解析 MCP server 列表 JSON；缺省或空字符串返回空列表。
+
+    JSON 必须是数组，每项符合 ``McpServerConfig`` schema。示例：
+
+    ``[{"name":"fs","transport":"stdio","command":"npx","args":["-y","@x/fs"]}]``
+    """
+    value = env.get(name)
+    if value is None or not value.strip():
+        return []
+    try:
+        data = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{name} must be a JSON array of MCP server configs") from error
+    if not isinstance(data, list):
+        raise ValueError(f"{name} must be a JSON array")
+    return [McpServerConfig.model_validate(item) for item in data]

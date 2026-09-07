@@ -20,6 +20,28 @@
 
 ---
 
+### Session 2026-09-07（接续 Trae 的 MCP 配置与连接管理实现）—— B2-1
+
+- **目标**：在已有未提交实现上完成 B2-1，沿用用户已确认的官方 MCP SDK + 最小 CLI 方案。
+- **完成任务**：
+  - `src/coding_agent/mcp/{__init__,contracts,connection}.py`：配置、连接协议、内存替身、stdio / Streamable HTTP 实现和连接管理器。
+  - SDK context managers 在独立 owner task 内进入和退出，避免 AnyIO cancel scope 跨任务或交错释放；握手、请求、关闭超时；启动取消/异常清理；并发启动幂等、重启、状态检查和失败隔离。
+  - `src/coding_agent/config.py`：`CODING_AGENT_MCP_SERVERS` JSON 数组；显式配置覆盖时不解析环境值。
+  - `src/coding_agent/cli/app.py`：`agent mcp list` / `agent mcp ping <name>`；重复名称与管理器一致采用最后配置；诊断完成或失败后释放连接。
+  - `tests/test_mcp_connection.py` + `tests/test_mcp_lifecycle.py`：55 个 MCP 测试，含 AnyIO task group 资源所有权回归和 CLI 测试。
+  - README 增加配置示例；更新 backlog 和 handoff。
+- **关键决策**：保留前次引入的 `mcp==1.9.4`（`pyproject.toml` + `uv.lock`），用于标准握手和传输。保留已有锁文件切换到官方 PyPI 的变动；不额外升级依赖。MCP 仅为显式配置的诊断/连接层，未装配到模型工具或 runtime，stdio 进程由操作者配置。
+- **验证结果**：
+  - `.venv/Scripts/ruff.exe check`：通过。
+  - `.venv/Scripts/mypy.exe` 与 `.venv/Scripts/mypy.exe src`：均通过，67 source files。
+  - `.venv/Scripts/python.exe -m pytest --basetemp .codex-test-tmp-final -p no:cacheprovider`：293 passed / 2 skipped。
+  - `uv --cache-dir .uv-cache lock --check --offline`：通过，60 packages。
+- **遇到的问题**：标准 `uv run` 尝试联网获取构建依赖 hatchling 时被环境网络权限阻止（os error 10013）。使用已安装的项目虚拟环境完成全部检查；未声称完成全新环境安装验证。
+- **未完成/遗留**：未连接真实 MCP 服务；测试使用内存替身和 SDK 形状的 transport/session（真实 AnyIO task group），不依赖外部服务。`is_alive` 是本地 session 状态，远端健康须主动 ping；工具 schema 注册、policy/trace、输出预算、结果审计脱敏分别留给 B2-2/B2-3/B2-4。
+- **下一步建议**：B2-2 MCP 工具动态发现与 schema 注册；保留现有沙箱与 patch-only 安全链路。
+
+---
+
 ### Session 2026-09-06（Memory TTL 过期 + 置信度衰减 + 归一化去重 + 来源外键放松）—— B1-6
 
 - **目标**：完成 B1-6：TTL 过期（提取时写 `expires_at`、召回/查询时过滤）、置信度半衰期衰减、内容归一化去重（memory_id）、`source_session_id` FK 从 CASCADE 放松为 SET NULL（删除 session 不再级联删除人工审核过的记忆）

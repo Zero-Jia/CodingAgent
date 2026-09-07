@@ -255,3 +255,27 @@ API 层只封装 `CodingAgent` 和 `ChatSession`，不复制 agent loop，也不
 ## 评测
 
 `coding_agent.evals` 提供可重复的场景和报告契约。测试覆盖未授权写入/Shell 拒绝、敏感文件拒绝、快照过滤、危险补丁拒绝、补丁回写的并发改动检测、验证变更丢弃以及会话存储的基本行为。报告会明确区分自动化测量指标与需要人工审核的项目，绝不伪造“代码质量评分”。
+
+
+## MCP 配置与连接诊断（B2-1）
+
+通过 `CODING_AGENT_MCP_SERVERS` 设置 JSON 数组，默认空列表。支持 `stdio` 和
+Streamable HTTP（`http`）。示例（PowerShell）：
+
+```powershell
+$env:CODING_AGENT_MCP_SERVERS = '[{"name":"local","transport":"stdio","command":"python","args":["C:/path/to/server.py"],"timeout_seconds":30},{"name":"remote","transport":"http","url":"http://localhost:8000/mcp","enabled":false}]'
+uv --cache-dir .uv-cache run agent mcp list
+uv --cache-dir .uv-cache run agent mcp ping local
+```
+
+将示例路径替换为自己的 MCP server。`stdio` 启动操作者配置的本地程序，可用
+`args`、`env`、`cwd` 设置参数、环境和工作目录；HTTP 使用 `url` 和可选 `headers`。
+`timeout_seconds` 为正有限数，约束握手、请求和关闭等待。重复 `name` 最后配置生效，
+`enabled=false` 禁用连接。`mcp list` 仅展示配置，`mcp ping` 建立会话、发送 ping、
+列出工具摘要并释放资源；失败退出码为 1。列表会显示命令参数和 URL，请避免在其中放置凭据。
+
+Python 层可用 `McpConnectionManager` 的 `async with`、`connect(name)`、
+`restart(name)`、`disconnect(name)`、`status()` 管理连接。生命周期 API 使用同一个
+asyncio event loop，可由不同任务调用；`is_alive` 仅表示本地 session 状态，远端健康需
+主动 `ping()`。当前没有将 MCP 工具注册到模型/runtime；工具注册和 policy/trace 集成
+将在 B2-2/B2-3/B2-4 完成。

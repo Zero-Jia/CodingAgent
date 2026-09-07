@@ -12,6 +12,12 @@ from coding_agent.agent.coding_agent import ChatSession, CodingAgent
 from coding_agent.ai.gateway import ModelProviderError, create_model_adapter
 from coding_agent.config import AgentConfig
 from coding_agent.db import check_database_url, database_health_text
+from coding_agent.mcp import (
+    McpConnection,
+    McpConnectionError,
+    McpServerConfig,
+    create_mcp_connection,
+)
 from coding_agent.memory import (
     MemoryExtractor,
     MemoryReviewService,
@@ -173,6 +179,88 @@ def db_check(
     typer.echo(database_health_text(health))
     if not health.ok:
         raise typer.Exit(code=1)
+
+
+mcp_app = typer.Typer(help="MCP server 配置与连接诊断。", no_args_is_help=True)
+app.add_typer(mcp_app, name="mcp")
+
+
+def _mcp_endpoint(config: McpServerConfig) -> str:
+    if config.transport == "stdio":
+        args = " ".join(config.args)
+        return f"{config.command} {args}".strip()
+    return config.url
+
+
+@mcp_app.command("list")
+def mcp_list(
+    workspace: Annotated[Path, typer.Option("--workspace", exists=True, file_okay=False)] = Path(
+        "."
+    ),
+) -> None:
+    """列出已配置的 MCP server 及其连接目标。"""
+    config = AgentConfig.from_environment(workspace)
+    servers = config.mcp_servers
+    if not servers:
+        typer.echo(
+            "未配置 MCP server。可通过 CODING_AGENT_MCP_SERVERS 环境变量"
+            "（JSON 数组）或代码注入 config.mcp_servers 配置。"
+        )
+        return
+    for server in servers:
+        state = "enabled" if server.enabled else "disabled"
+        typer.echo(
+            f"{server.name}\t{server.transport}\t{state}\t{_mcp_endpoint(server)}"
+        )
+
+
+@mcp_app.command("ping")
+def mcp_ping(
+    name: str,
+    workspace: Annotated[Path, typer.Option("--workspace", exists=True, file_okay=False)] = Path(
+        "."
+    ),
+) -> None:
+    """连接指定 MCP server，执行 ping 并列出可用工具。"""
+    config = AgentConfig.from_environment(workspace)
+    matched = [server for server in config.mcp_servers if server.name == name]
+    if not matched:
+        typer.echo(
+            f"未找到名为 {name!r} 的 MCP server；可用："
+            + (", ".join(server.name for server in config.mcp_servers) or "(无)"),
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    target = matched[-1]
+    if not target.enabled:
+        typer.echo(f"MCP server {name!r} 已被禁用（enabled=False）。", err=True)
+        raise typer.Exit(code=1)
+
+    conn = create_mcp_connection(target)
+    try:
+        asyncio.run(_mcp_ping_run(conn, name))
+    except McpConnectionError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from error
+
+
+async def _mcp_ping_run(conn: McpConnection, name: str) -> None:
+    await conn.connect()
+    try:
+        await conn.ping()
+        typer.echo(f"ping {name}: OK")
+        tools = await conn.list_tools()
+        if tools:
+            typer.echo(f"可用工具（{len(tools)}）：")
+            for tool in tools:
+                desc = f"  {tool.name}"
+                if tool.description:
+                    desc += f"  {tool.description}"
+                typer.echo(desc)
+        else:
+            typer.echo("该 server 未暴露工具。")
+    finally:
+        await conn.disconnect()
 
 
 @app.command("index-workspace")
