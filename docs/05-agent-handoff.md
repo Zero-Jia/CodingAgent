@@ -8,7 +8,7 @@
 
 - 项目已完成安全优先 Coding Agent MVP（安全内核 + Runtime + MySQL 存储 + Milvus 语义索引）
 - 文档体系已重构为编号格式（`/docs/00-*.md` ~ `09-*.md`）
-- **当前阶段：Phase B 高辨识度能力**，Memory 系统完成，MCP B2-1/B2-2 完成
+- **当前阶段：Phase B 高辨识度能力**，Memory 系统完成，MCP B2-1/B2-2/B2-3 完成
 - 安全内核完整：Docker 无网络沙箱 + 快照过滤 + patch-only 写回 + 审批流 + 命令风险检测
 - **B1-1 已完成**：`memories` 表 + Alembic migration 0004 + `MemoryStore` Protocol（store/get/list_by_status/update_status/list_promoted/search）+ `MySqlMemoryStore` + `NoopMemoryStore` + 15 个契约测试
 - **B1-2 已完成**：`MemoryVectorIndex` Protocol + `MilvusMemoryVectorIndex`（独立 collection，COSINE，按 user+project 过滤）+ `InMemoryMemoryVectorIndex`；config `milvus_memory_collection`（B1-5 修复了该字段未声明、pydantic 静默丢弃的 bug）
@@ -19,7 +19,8 @@
 - **B1-6 已完成**：TTL（extractor 写 `expires_at`，mysql `list_promoted`/`search` 软过滤）+ 置信度半衰期衰减（`effective_confidence`，recall 过滤/打分用，不改存储值）+ memory_id 归一化（空白折叠 + 小写后哈希，去重）+ `source_session_id` FK 放松为 nullable + SET NULL（migration 0005：SQLite batch 重建 / MySQL ALTER；删除 session 后记忆保留，来源读取为 ""）。config 新增 `memory_ttl_days`/`memory_decay_half_life_days` + env
 - **B2-1 已完成**：官方 `mcp==1.9.4`，stdio / Streamable HTTP 连接管理器，独立 owner task 保证 SDK 资源在同任务释放；超时、取消清理、并发启停、重启、失败隔离；`CODING_AGENT_MCP_SERVERS` JSON 配置 + CLI `agent mcp list` / `agent mcp ping <name>`。55 个 MCP 测试；连接层供 B2-2 复用。
 - **B2-2 已完成**：`McpDiscoveryService` + `DiscoveredMcpTool` / `McpDiscoveryResult`；`tools/list` 分页、全程超时、游标去重和 100 页上限；schema 结构校验与深拷贝；稳定名称空间；`McpTool` / `register_mcp_tools` 幂等快照注册；每回合模型请求前发现并关闭连接。取消发现释放资源，服务失败隔离；policy 和适配器都拒绝实际调用。新增 26 个测试。
-- 测试基线：319 passed，2 skipped；ruff + 两种 mypy strict 检查全通过（69 source files）。使用现有 `.venv` 验证，本轮无新增依赖。前轮 `uv run` 联网构建受阻，离线 lock 一致性检查通过。
+- **B2-3 已完成**：`McpExecutionService` 每次调用独立连接、schema 重核、整体超时与取消释放；`allowed_readonly_tools` 为操作者审核后的 HTTP 只读工具原名列表，policy 与适配器默认拒绝未授权调用，stdio 模型调用仍拒绝。参数校验采用 fail-closed JSON Schema 子集；文本脱敏后按输出预算截断，复用 runtime policy/trace/artifact；非文本块只记录省略数量。新增 47 个测试。
+- 测试基线：366 passed，2 skipped；ruff + 两种 mypy strict 检查通过（71 source files）。本轮使用现有 `.venv`（Python 3.13.3），无新增依赖或 DB 迁移；未验证 Python 3.12、全新环境安装或真实 MCP 服务。前轮 `uv run` 联网构建受阻，本轮沿用已安装环境验证。
 - **Phase B1 Memory 系统全部完成**
 
 ## 下一步优先做什么
@@ -36,16 +37,19 @@
 7. ~~B1-6：记忆过期与置信度管理~~ ✅ done
 8. ~~B2-1：MCP server 配置与连接管理器~~ ✅ done
 9. ~~B2-2：MCP 工具动态发现与 schema 注册~~ ✅ done
-10. **B2-3**：MCP 工具包装（policy + trace + 输出预算）。
+10. ~~B2-3：MCP 工具包装（policy + trace + 输出预算）~~ ✅ done（受控 HTTP 只读范围）。
+11. **B2-4**：MCP 调用审计与脱敏。
 
-MCP 使用说明见 README。按显式配置在每回合启动时发现工具；stdio 会启动操作者指定的程序。模型可看到工具 schema，但 policy 和 `McpTool.execute` 都明确拒绝 MCP 执行，未向模型开放宿主机执行能力。真实 MCP 服务联调未执行。`is_alive` 只反映本地 session 状态；健康检查使用 `ping`。
+MCP 使用说明见 README。每回合按显式配置发现工具；stdio 会启动操作者指定的程序，但模型不能调用 stdio 工具。HTTP 仅允许 `allowed_readonly_tools` 中操作者审核的原始工具名，无通配符；不继承 shell/write 授权，不依赖服务 annotations。未向模型开放通用宿主机执行或写能力。真实 MCP 服务联调未执行。`is_alive` 只反映本地 session 状态；健康检查使用 `ping`。
 
-B2-2 限制及 B2-3 接续点：
-- 发现后立即断开，B2-3 需要为真正调用设计连接持有/重连与释放策略；当前不处理回合内 `tools/list_changed` 通知。
+B2-3 限制及 B2-4 接续点：
+- 发现后立即断开；实际调用各自连接目标服务，重新核对 schema 后执行，不重试。连接/列表/调用共用 timeout，清理另有同长度预算；不处理 `tools/list_changed` 通知。
 - `DiscoveredMcpTool` / `McpTool` 保留 server_name、tool_name 和 definition，供调用路由使用；不要从哈希名称反解析原始名称。
-- schema 只做根对象与 properties/required 结构及 JSON 序列化校验，未实现完整 JSON Schema 或调用参数校验。
+- 发现保留原 schema；执行校验支持的子集见 README，未知关键字（含 `$ref`/`$defs`/`pattern`/`format`）拒绝。深度上限 24，schema+参数 JSON 合计 128,000 字符，不提供完整 JSON Schema 支持。
 - 名称冲突或 schema 无效拒绝该服务整份列表；发现失败只记录分类错误，不缓存旧工具。应用日志事件为 `mcp_discovery_incomplete`。
-- B2-3/B2-4 的执行 policy、trace、输出预算和审计脱敏尚未实现；现有默认拒绝不可直接改为全量放行。
+- 已复用 runtime 的 policy_decision/tool_finished trace 和 artifact；文本先去配置凭据与常见敏感模式后截断，异常仅分类。B2-4 继续补充参数审计、原始路由关联、耗时/关联 ID 和更完整的脱敏验证；不能声称已完成全链路审计。
+- `allowed_readonly_tools` 是操作者对可信服务的预授权，不是远端只读性的技术证明；服务端须限制权限与访问范围，同 schema 行为变更不可检测。stdio/写工具仍不能放开。
+- 仅归一化文本；非文本块计入 `omitted_content_blocks`，不读取资源链接。预算约束模型及持久化输出，不约束 SDK 完整接收响应的内存；常见模式脱敏不能保证识别所有秘密。
 
 Memory 已知限制（后续按需改进，不阻塞 B2）：
 - 过期记忆只有软过滤，没有物理 GC；向量索引中过期/拒绝记忆也不会被 sync 清理（reject 过的记忆若曾同步会残留索引，但 recall 回查 `store.get` 校验，正确性不受影响）

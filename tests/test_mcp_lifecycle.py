@@ -69,6 +69,54 @@ async def test_sdk_lifecycle_across_tasks(sdk, transport):
     assert sdk.closed == 2
 
 
+@pytest.mark.parametrize('outcome', ['success', 'cancel', 'timeout'])
+async def test_execution_sdk_owner_cleanup(sdk, monkeypatch, outcome):
+    from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool
+
+    import coding_agent.mcp.connection as module
+    from coding_agent.mcp.contracts import McpToolSchema
+    from coding_agent.mcp.discovery import _definition
+    from coding_agent.mcp.execution import McpExecutionService
+    from coding_agent.tools.contracts import ToolContext
+    from coding_agent.tools.mcp import McpTool
+
+    entered = asyncio.Event()
+
+    async def call_tool(name, arguments):
+        entered.set()
+        if outcome != 'success':
+            await asyncio.Event().wait()
+        return CallToolResult(content=[TextContent(type='text', text='safe result')])
+
+    @asynccontextmanager
+    async def session(*args, **kwargs):
+        async with anyio.create_task_group():
+            yield SimpleNamespace(
+                initialize=AsyncMock(), call_tool=call_tool,
+                list_tools=AsyncMock(return_value=ListToolsResult(
+                    tools=[Tool(name='read', inputSchema={'type': 'object'})])),
+            )
+
+    monkeypatch.setattr(module, 'ClientSession', session)
+    cfg = McpServerConfig(name='remote', transport='http', url='https://example.invalid/mcp',
+                          timeout_seconds=0.05, allowed_readonly_tools=['read'])
+    tool = McpTool(_definition('remote', McpToolSchema(
+        name='read', input_schema={'type': 'object'})), McpExecutionService([cfg]))
+    signal = asyncio.Event()
+
+    async def collect():
+        return [item async for item in tool.execute({}, ToolContext(workspace='unused'), signal)]
+
+    task = asyncio.create_task(collect())
+    await asyncio.wait_for(entered.wait(), 1)
+    if outcome == 'cancel':
+        signal.set()
+    results = await asyncio.wait_for(task, 1)
+    assert results[0].status == {'success': 'success', 'cancel': 'cancelled',
+                                 'timeout': 'timeout'}[outcome]
+    assert sdk.opened == sdk.closed == 1
+
+
 async def test_initialize_timeout_cleans_transport(sdk, monkeypatch):
     import coding_agent.mcp.connection as module
 

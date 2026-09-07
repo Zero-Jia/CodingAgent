@@ -35,6 +35,8 @@ class McpServerConfig(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     timeout_seconds: float = Field(default=30.0, gt=0.0, allow_inf_nan=False)
     enabled: bool = True
+    # Operator-reviewed HTTP read-only capabilities; never inferred from annotations.
+    allowed_readonly_tools: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate_transport_fields(self) -> Self:
@@ -63,12 +65,13 @@ class McpToolSchema(BaseModel):
 class McpToolResult(BaseModel):
     """MCP 工具调用结果的归一表示。
 
-    ``content`` 为各文本块拼接结果；非文本块（图片等）在 B2-1 暂不展开。
+    ``content`` 为各文本块拼接结果；非文本块（图片等）不展开，只记录省略数量。
     """
 
     name: str
     content: str = ""
     is_error: bool = False
+    omitted_content_blocks: int = 0
 
 
 class McpConnectionStatus(BaseModel):

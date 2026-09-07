@@ -257,7 +257,7 @@ API 层只封装 `CodingAgent` 和 `ChatSession`，不复制 agent loop，也不
 `coding_agent.evals` 提供可重复的场景和报告契约。测试覆盖未授权写入/Shell 拒绝、敏感文件拒绝、快照过滤、危险补丁拒绝、补丁回写的并发改动检测、验证变更丢弃以及会话存储的基本行为。报告会明确区分自动化测量指标与需要人工审核的项目，绝不伪造“代码质量评分”。
 
 
-## MCP 配置、连接诊断与工具发现（B2-1/B2-2）
+## MCP 配置、连接诊断与受控调用（B2-1/B2-2/B2-3）
 
 通过 `CODING_AGENT_MCP_SERVERS` 设置 JSON 数组，默认空列表。支持 `stdio` 和
 Streamable HTTP（`http`）。示例（PowerShell）：
@@ -281,8 +281,25 @@ asyncio event loop，可由不同任务调用；`is_alive` 仅表示本地 sessi
 
 配置 MCP 服务后，`ChatSession.send()` 在每回合首次模型请求前拉取工具定义并注册到
 runtime。空配置不发起 MCP IO。发现完成后立即关闭连接，模型可看到工具描述与输入
-schema，但 **MCP 工具调用暂时始终拒绝**，即使开启 `allow_shell` / `allow_write`；
-调用包装与审计留待 B2-3/B2-4。stdio 服务会在每次发现时启动操作者配置的程序。
+schema。调用默认拒绝；只有 HTTP 服务中操作者明确配置的 `allowed_readonly_tools`
+才允许执行，按原始工具名精确匹配，无通配符。`allow_shell` / `allow_write` 不授予 MCP
+权限。stdio 服务会在每次发现时启动操作者配置的程序，但模型不能调用它的工具。
+
+例如，审核远端 `lookup` 工具确实只读后，可配置：
+
+```powershell
+$env:CODING_AGENT_MCP_SERVERS = '[{"name":"knowledge","transport":"http","url":"https://your-trusted-service/mcp","allowed_readonly_tools":["lookup"],"timeout_seconds":30}]'
+```
+
+`allowed_readonly_tools` 是操作者对可信服务的预授权，交互和非交互模式均适用；不依赖
+服务提供的只读 annotations，也不会从模型参数获得授权。不要列入 shell、写文件或其他
+有副作用的工具。Runtime 不能验证远端实现的只读性，服务访问范围及只读凭据须由操作者
+在服务端限制；同 schema 的远端行为变更无法检测。通用 stdio 执行与写工具仍未开放，
+不能借此绕过 Docker sandbox / patch-only 写回。
+
+每次允许的调用独立连接目标服务，重新读取工具列表并核对 input schema，再执行一次；
+不自动重试。连接、列表和调用共用 `timeout_seconds`，退出清理另有同长度预算；完成、
+失败、超时和取消都释放连接。并发调用不共享 session。
 
 工具注册名格式为 `mcp__<服务片段>__<工具片段>__<原始名称对哈希>`，仅包含 ASCII
 字母、数字、下划线和连字符，最长 61 字符；保留原服务名和工具名供后续调用路由使用。
@@ -291,9 +308,23 @@ schema，但 **MCP 工具调用暂时始终拒绝**，即使开启 `allow_shell`
 
 `tools/list` 按 `nextCursor` 拉取全部分页，整次列表共用 `timeout_seconds`，最多
 100 页，重复游标或超限视为发现失败。输入 schema 保留嵌套结构，检查根 `type=object`、
-`properties` / `required` 结构和 JSON 可序列化性；尚未实现完整 JSON Schema 校验或
-调用参数校验。重复工具名、无效 schema 或注册冲突会拒绝该服务整份列表，不影响其他服务。
+`properties` / `required` 结构和 JSON 可序列化性。重复工具名、无效 schema 或注册冲突
+会拒绝该服务整份列表，不影响其他服务。
 发现失败在应用日志中记录 `mcp_discovery_incomplete`（数量与错误类别）。
+
+执行前另做参数校验，支持单一 `type`、`properties`、`required`、`additionalProperties`、
+`items`、`enum`、`const`、`anyOf`、`minLength/maxLength`、`minItems/maxItems` 和
+`minimum/maximum`；忽略说明性 `title/description/default/examples/$comment`。
+整个 schema（含未使用的可选属性）出现未支持关键字时拒绝执行，例如 `$ref`、`$defs`、
+`pattern`、`format`、组合 type 数组；不会联网解析引用。schema 深度最多 24 层，schema
+与参数的 JSON 序列化合计最多 128,000 字符。这是保守子集，不是完整 JSON Schema 实现。
+
+仅返回文本内容，非文本块计入 `omitted_content_blocks`，不抓取资源链接。文本先去除
+配置中的 header/env 值以及常见 token、password、API key、Bearer、PEM 私钥模式，再按
+`max_tool_output_chars` 截断；结果含 `truncated`。模型、artifact 和现有 `tool_finished`
+trace 接收的都是处理后的结果，trace 仍仅保存输出摘要。异常只暴露分类，不输出底层
+异常文本。预算限制返回及持久化内容，不限制 SDK 接收完整响应时的内存占用；模式脱敏
+不等于任意秘密识别。参数、关联 ID、耗时等专项审计与更完整脱敏策略留给 B2-4。
 
 Python 层可独立使用 `McpDiscoveryService.discover()` 获取定义与分类错误，再用
 `register_mcp_tools()` 将新快照幂等注册到工具表。发现过程支持取消并释放已打开连接。

@@ -26,7 +26,7 @@
 |---|---|---|---|---|
 | B2-1 | MCP server 配置与连接管理器 | done | `src/coding_agent/mcp/__init__.py`、`contracts.py`、`connection.py`、`src/coding_agent/config.py`、`src/coding_agent/cli/app.py`、`pyproject.toml`、`uv.lock`、`tests/test_mcp_connection.py`、`tests/test_mcp_lifecycle.py`、`README.md` | 官方 mcp==1.9.4；stdio / Streamable HTTP；独立任务管理 SDK 生命周期，超时、取消清理、并发启停、重启、失败隔离；JSON 配置 + CLI mcp list/ping；55 个 MCP 测试，全量 293 passed / 2 skipped。未注册 runtime 工具（B2-2）；2026-09-07 本轮收尾确认完成 |
 | B2-2 | MCP 工具动态发现与 schema 注册 | done | `src/coding_agent/mcp/discovery.py`、`src/coding_agent/mcp/connection.py`、`src/coding_agent/mcp/contracts.py`、`src/coding_agent/mcp/__init__.py`、`src/coding_agent/tools/mcp.py`、`src/coding_agent/agent/coding_agent.py`、`src/coding_agent/policy/engine.py`、`tests/test_mcp_discovery.py`、`tests/test_mcp_lifecycle.py`、`README.md` | 每回合首次模型请求前发现并关闭连接；分页（整体超时、循环游标检测、100 页上限）；名称空间与稳定哈希；schema 结构校验、原结构保留；幂等快照替换、失败隔离、取消清理。新增 26 个测试；MCP 执行明确拒绝，包装留给 B2-3 |
-| B2-3 | MCP 工具包装（policy + trace + 输出预算） | todo | — | MCP 调用经过 policy 决策、trace 记录、输出脱敏和预算限制 |
+| B2-3 | MCP 工具包装（policy + trace + 输出预算） | done | `src/coding_agent/mcp/execution.py`、`src/coding_agent/mcp/validation.py`、`src/coding_agent/mcp/contracts.py`、`src/coding_agent/mcp/connection.py`、`src/coding_agent/tools/mcp.py`、`src/coding_agent/policy/engine.py`、`src/coding_agent/agent/coding_agent.py`、`tests/test_mcp_execution.py`、`tests/test_mcp_lifecycle.py`、`README.md` | 默认拒绝；仅操作者按原始名称预授权的 HTTP 只读工具可执行（`allowed_readonly_tools`），stdio 模型调用仍拒绝。每次调用独立连接、schema 重核、整体超时与取消清理；参数使用 fail-closed JSON Schema 子集；文本先脱敏后截断，复用 runtime policy/trace/artifact。新增 47 个测试；远端只读性依赖操作者审核和服务端权限，不提供通用 MCP 写/执行能力。B2-4 专项审计仍 todo |
 | B2-4 | MCP 调用审计与脱敏 | todo | — | MCP 工具结果写入 trace，敏感信息脱敏 |
 
 ### B3：多 Agent + Worktree 隔离

@@ -20,6 +20,38 @@
 
 ---
 
+### Session 2026-09-07（MCP 受控调用、脱敏与输出预算）—— B2-3
+
+- **目标**：按用户确认完成 B2-3，将已发现 MCP 工具接入受控执行，保留 sandbox / patch-only 安全边界。
+- **完成任务**：
+  - `src/coding_agent/mcp/execution.py`（新增）：`McpExecutionService`，配置深拷贝、仅授权 HTTP 只读工具；每次调用独立连接并重新核对工具 schema，连接/列表/调用共用超时，清理另有同长度预算，不自动重试。配置凭据与常见敏感输出模式脱敏。
+  - `src/coding_agent/mcp/validation.py`（新增）：保守 JSON Schema 子集，先检查整份 schema（含未使用可选属性）再校验参数；未知关键字拒绝，深度 24、序列化 schema+参数 128,000 字符预算，无外部引用解析。
+  - `src/coding_agent/mcp/contracts.py`：server 配置新增 `allowed_readonly_tools`，结果新增 `omitted_content_blocks`；`connection.py` 归一化文本并统计未展开的非文本块。
+  - `src/coding_agent/tools/mcp.py`：执行前独立授权与参数校验，取消信号/任务取消、超时和分类错误处理；先脱敏再按 `max_tool_output_chars` 截断，结果携带截断与非文本省略信息。
+  - `src/coding_agent/policy/engine.py`、`agent/coding_agent.py`：每次发现注册时同步刷新已授权工具集合；未知工具、未授权 HTTP 和所有 stdio 模型调用仍拒绝，`allow_shell`/`allow_write` 不改变 MCP 权限。
+  - 复用现有 runtime 的 `policy_decision`/`tool_finished` trace、模型结果和 artifact 链路；本轮无需修改 `runtime/loop.py`、`tracing/store.py`、`config.py` 或 CLI。
+  - `tests/test_mcp_execution.py`（新增）：44 个测试，覆盖授权、参数、schema 漂移、并发连接、超时、两种取消、失败分类、脱敏、截断、非文本省略和 ChatSession 到 trace/artifact/model 的联通。
+  - `tests/test_mcp_lifecycle.py`：新增 3 个 SDK 形状 transport/session 测试，使用真实 AnyIO task group 检查成功、取消和超时后的 owner task 资源释放。
+  - 更新 README、backlog 和 handoff，B2-3 标记 done，B2-4 保持 todo。
+- **关键决策**：
+  - 只开放操作者明确审核的 HTTP 只读工具原名列表，无通配符；这是配置预授权，非交互模式也适用，不依据工具 annotations 放行。stdio 启动仍仅用于既有发现/诊断，模型调用不开放，避免本地工具绕过沙箱。
+  - 远端只读性是可信服务与服务端权限的部署约束，runtime 不能证明远端行为只读，也不能检测同 schema 的实现变更。
+  - 未新增依赖；schema 子集遇到 `$ref`/`$defs`/`pattern`/`format` 等不支持项拒绝执行，不忽略约束或联网解析。
+  - 输出在离开工具适配器前完成处理，所以模型、trace 与 artifact 都接收处理后内容；底层异常只返回分类。
+- **验证结果**：
+  - `.venv/Scripts/ruff.exe check`：通过。
+  - `.venv/Scripts/mypy.exe` 与 `.venv/Scripts/mypy.exe src`：均通过，71 source files。
+  - `.venv/Scripts/python.exe -m pytest --basetemp .codex-test-tmp-b23-verified -p no:cacheprovider`：366 passed / 2 skipped（14.08s），较 319/2 基线新增 47 个测试。
+  - `git diff --check`：通过（仅 Git 的 LF/CRLF 转换提示）。
+  - 沿用已有 `.venv`，实际解释器 Python 3.13.3；前轮 `uv run` 联网构建受限，本轮无新增依赖，不重建环境或修改 lock。
+- **未完成/遗留**：
+  - 未联调真实服务，未验证全新环境安装或 Python 3.12；测试不依赖真实 API/MCP 服务。
+  - 非文本只计数省略；输出预算不限制 SDK 完整接收响应的内存。模式脱敏不能保证识别任意秘密。
+  - 不支持通用 stdio/写工具、完整 JSON Schema、`tools/list_changed`；参数审计、路由关联、耗时/关联 ID 和更完整脱敏策略留给 B2-4。
+- **下一步建议**：B2-4 MCP 调用审计与脱敏，沿用现有默认拒绝和 HTTP 只读边界，不扩展宿主机权限。
+
+---
+
 ### Session 2026-09-07（MCP 工具动态发现与 schema 注册）—— B2-2
 
 - **目标**：按用户确认完成 B2-2：发现 MCP 工具、转换 schema 并注册到 runtime，实际执行仍拒绝。

@@ -47,14 +47,19 @@ def _tool_to_schema(tool: Tool) -> McpToolSchema:
 
 def _result_to_model(name: str, result: CallToolResult) -> McpToolResult:
     texts: list[str] = []
+    omitted = 0
     for block in result.content:
         text = getattr(block, "text", None)
-        if isinstance(text, str) and text:
-            texts.append(text)
+        if isinstance(text, str):
+            if text:
+                texts.append(text)
+        else:
+            omitted += 1
     return McpToolResult(
         name=name,
         content="\n".join(texts),
         is_error=result.isError,
+        omitted_content_blocks=omitted,
     )
 
 

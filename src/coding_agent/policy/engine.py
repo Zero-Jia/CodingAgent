@@ -28,6 +28,7 @@ class PolicyEngine:
         self.allow_write = allow_write
         self.allow_shell = allow_shell
         self.non_interactive = non_interactive
+        self.mcp_readonly_tools: frozenset[str] = frozenset()
 
     def path_decision(self, path: Path, tool_name: str) -> PolicyDecision:
         try:
@@ -42,7 +43,9 @@ class PolicyEngine:
 
     def tool_decision(self, tool_name: str, params: dict[str, object]) -> PolicyDecision:
         if tool_name.startswith("mcp__"):
-            return PolicyDecision("deny", "MCP execution is not enabled (B2-3 pending)")
+            if tool_name in self.mcp_readonly_tools:
+                return PolicyDecision("allow", "operator-authorized HTTP read-only MCP tool")
+            return PolicyDecision("deny", "MCP tool lacks explicit read-only authorization")
         if tool_name in {"read", "edit", "write"}:
             raw_path = params.get("path")
             if not isinstance(raw_path, str):

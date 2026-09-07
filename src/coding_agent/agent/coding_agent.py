@@ -12,6 +12,7 @@ from pathlib import Path
 from coding_agent.ai.contracts import ChatMessage, ModelAdapter, Usage
 from coding_agent.config import AgentConfig
 from coding_agent.mcp.discovery import McpDiscoveryService
+from coding_agent.mcp.execution import McpExecutionService
 from coding_agent.memory.contracts import MemoryStore, MemoryVectorIndex, NoopMemoryStore
 from coding_agent.memory.mysql import MySqlMemoryStore
 from coding_agent.memory.recall import (
@@ -355,12 +356,17 @@ class CodingAgent:
         self.artifacts = JsonlArtifactStore(self.data_root)
         self.memory_recall = _create_memory_recall(config, self.sessions)
         self.mcp_discovery = McpDiscoveryService(config.mcp_servers)
+        self.mcp_execution = McpExecutionService(config.mcp_servers)
 
     async def _register_mcp_tools(self, runtime: AgentRuntime) -> None:
         discovery = await self.mcp_discovery.discover(reserved_names={
             name for name, tool in runtime.tools.items() if not isinstance(tool, McpTool)
         })
-        register_mcp_tools(runtime.tools, discovery)
+        register_mcp_tools(runtime.tools, discovery, self.mcp_execution)
+        runtime.policy.mcp_readonly_tools = frozenset(
+            name for name, tool in runtime.tools.items() if isinstance(tool, McpTool)
+            and tool.authorized
+        )
         if discovery.errors:
             await self.application_log.write(
                 "warning", "mcp_discovery_incomplete",
